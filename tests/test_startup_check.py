@@ -102,8 +102,8 @@ class TestStartupCheckEdgeCases:
         # 不应该有错误
         assert not result.has_errors, f"Unexpected errors: {result.errors}"
     
-    def test_legacy_sim_mode_mapped_to_paper_on_real(self):
-        """旧的 sim 模式应该被映射到 paper_on_real 并产生警告"""
+    def test_legacy_sim_mode_mapped_to_paper(self):
+        """旧的 sim 模式应该被映射到 paper 并产生警告"""
         result = StartupSelfCheck.check_okx_environment(
             run_mode='sim',
             api_key='live_key_12345',
@@ -114,15 +114,15 @@ class TestStartupCheckEdgeCases:
         assert result.has_warnings, "Expected warning for legacy mode mapping"
         
         # 模式应该被映射
-        assert result.run_mode == 'paper_on_real'
+        assert result.run_mode == 'paper'
         
         # 不应该有错误
         assert not result.has_errors, f"Unexpected errors: {result.errors}"
     
-    def test_legacy_paper_mode_mapped_to_paper_on_real(self):
-        """旧的 paper 模式应该被映射到 paper_on_real 并产生警告"""
+    def test_legacy_paper_on_real_mode_mapped_to_paper(self):
+        """旧的 paper_on_real 模式应该被映射到 paper 并产生警告"""
         result = StartupSelfCheck.check_okx_environment(
-            run_mode='paper',
+            run_mode='paper_on_real',
             api_key='live_key_12345',
             is_sandbox=False
         )
@@ -131,7 +131,7 @@ class TestStartupCheckEdgeCases:
         assert result.has_warnings, "Expected warning for legacy mode mapping"
         
         # 模式应该被映射
-        assert result.run_mode == 'paper_on_real'
+        assert result.run_mode == 'paper'
     
     def test_no_api_key_error(self):
         """无 API Key 应该报错"""
@@ -173,15 +173,15 @@ class TestStartupCheckEdgeCases:
         assert result.sandbox_enabled == False
         assert result.key_type == 'live_key'
     
-    def test_result_properties_paper_on_real_mode(self):
-        """验证 paper_on_real 模式结果属性"""
+    def test_result_properties_paper_mode(self):
+        """验证 paper 模式结果属性"""
         result = StartupSelfCheck.check_okx_environment(
-            run_mode='paper_on_real',
+            run_mode='paper',
             api_key='live_key_12345',
             is_sandbox=False
         )
         
-        assert result.run_mode == 'paper_on_real'
+        assert result.run_mode == 'paper'
         assert '实盘' in result.api_domain
         assert result.simulated_trading == 0
         assert result.sandbox_enabled == False

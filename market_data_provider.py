@@ -213,7 +213,11 @@ class MarketDataProvider:
                 try:
                     data = self._fetch_full_history(symbol, timeframe, limit)
                     
-                    if data and len(data) > 0:
+                    # 🔥 修复：接受较少的K线数据（新上线币种可能数据不足）
+                    # 最低要求：至少 50 根 K 线才能进行基本的技术分析
+                    MIN_BARS_REQUIRED = 50
+                    
+                    if data and len(data) >= MIN_BARS_REQUIRED:
                         max_ts = max(candle[0] for candle in data)
                         
                         # 创建缓存条目
@@ -231,8 +235,27 @@ class MarketDataProvider:
                         if key in self.pending_init:
                             del self.pending_init[key]
                         
-                        logger.info(f"[md-init] {symbol} {timeframe} 全量拉取完成 {len(data)} bars, max_ts={max_ts}")
+                        # 🔥 如果数据不足目标数量，打印警告但不失败
+                        if len(data) < limit:
+                            logger.warning(f"[md-init] {symbol} {timeframe} 数据不足目标 ({len(data)}/{limit} bars)，可能是新上线币种")
+                        else:
+                            logger.info(f"[md-init] {symbol} {timeframe} 全量拉取完成 {len(data)} bars, max_ts={max_ts}")
+                        
                         self.reset_circuit_breaker("ohlcv", symbol)
+                        return data, False
+                    elif data and len(data) > 0:
+                        # 🔥 数据太少（< 50 根），记录警告但仍然缓存
+                        max_ts = max(candle[0] for candle in data)
+                        self.ohlcv_cache[key] = OHLCVCacheEntry(
+                            data=data,
+                            last_max_ts=max_ts,
+                            fetched_at_ms=now_ms,
+                            is_stale=False,
+                            stale_count=0,
+                            bars_count=len(data),
+                            is_initialized=True  # 标记为已初始化，避免重复拉取
+                        )
+                        logger.warning(f"[md-init] {symbol} {timeframe} K线数量过少 ({len(data)} bars)，策略可能无法正常工作")
                         return data, False
                     else:
                         raise Exception(f"全量拉取返回空数据: {symbol} {timeframe}")
@@ -1013,3 +1036,357 @@ class MarketDataProvider:
         """
         # 直接调用新的智能缓存方法
         return self.get_ohlcv(symbol, timeframe, limit)
+
+
+# ============ 🔥 双 Key 机制：行情专用 Provider 工厂 ============
+
+def create_market_data_exchange(use_market_key: bool = True):
+    """
+    创建行情数据专用的交易所适配器
+    
+    🔥 双 Key 机制：
+    - use_market_key=True: 优先使用行情专用 Key (MARKET_DATA_API_KEY)
+    - use_market_key=False: 使用交易 Key (OKX_API_KEY)
+    
+    参数:
+    - use_market_key: 是否使用行情专用 Key
+    
+    返回:
+    - (exchange_adapter, is_dedicated_key) 元组
+      - exchange_adapter: ccxt.okx 实例
+      - is_dedicated_key: 是否使用了独立行情 Key
+    """
+    import ccxt
+    
+    # 读取行情专用 Key
+    market_key = os.getenv("MARKET_DATA_API_KEY", "")
+    market_secret = os.getenv("MARKET_DATA_SECRET", "")
+    market_passphrase = os.getenv("MARKET_DATA_PASSPHRASE", "")
+    
+    # 读取交易 Key（回退）
+    trade_key = os.getenv("OKX_API_KEY", "")
+    trade_secret = os.getenv("OKX_API_SECRET", "")
+    trade_passphrase = os.getenv("OKX_API_PASSPHRASE", "")
+    
+    # 决定使用哪套 Key
+    is_dedicated_key = False
+    if use_market_key and market_key and market_secret and market_passphrase:
+        api_key = market_key
+        api_secret = market_secret
+        api_passphrase = market_passphrase
+        is_dedicated_key = True
+        logger.info("[MarketData] 使用独立行情 Key 🔐")
+    else:
+        api_key = trade_key
+        api_secret = trade_secret
+        api_passphrase = trade_passphrase
+        if use_market_key:
+            logger.warning("[MarketData] 未配置独立行情 Key，回退使用交易 Key")
+        else:
+            logger.info("[MarketData] 使用交易 Key")
+    
+    # 获取代理配置
+    http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+    https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+    
+    # 创建 ccxt 配置
+    config = {
+        'enableRateLimit': True,
+        'options': {
+            'defaultType': 'swap',
+        }
+    }
+    
+    # 添加代理
+    if https_proxy:
+        config['proxies'] = {
+            'http': http_proxy or https_proxy,
+            'https': https_proxy
+        }
+    
+    # 添加 API 凭证
+    if api_key and api_secret and api_passphrase:
+        config['apiKey'] = api_key
+        config['secret'] = api_secret
+        config['password'] = api_passphrase
+    
+    exchange = ccxt.okx(config)
+    return exchange, is_dedicated_key
+
+
+def create_market_data_provider_with_dedicated_key(
+    timeframe: str = '1m',
+    ohlcv_limit: int = 1000,
+    **kwargs
+) -> 'MarketDataProvider':
+    """
+    创建使用行情专用 Key 的 MarketDataProvider
+    
+    🔥 双 Key 机制：自动使用行情专用 Key，与交易接口隔离
+    
+    参数:
+    - timeframe: 默认时间周期
+    - ohlcv_limit: 默认 K线数量
+    - **kwargs: 其他 MarketDataProvider 参数
+    
+    返回:
+    - MarketDataProvider 实例
+    """
+    exchange, is_dedicated = create_market_data_exchange(use_market_key=True)
+    
+    provider = MarketDataProvider(
+        exchange_adapter=exchange,
+        timeframe=timeframe,
+        ohlcv_limit=ohlcv_limit,
+        **kwargs
+    )
+    
+    # 记录 Key 类型
+    provider._is_dedicated_market_key = is_dedicated
+    
+    return provider
+
+
+# ============ 🔥 WebSocket 数据源支持 ============
+
+# WebSocket 客户端导入
+try:
+    from okx_websocket import (
+        OKXWebSocketClient, 
+        get_ws_client, 
+        start_ws_client, 
+        stop_ws_client,
+        is_ws_available,
+        WEBSOCKET_AVAILABLE
+    )
+    WS_IMPORT_OK = True
+except ImportError:
+    WS_IMPORT_OK = False
+    WEBSOCKET_AVAILABLE = False
+    logger.warning("okx_websocket module not available")
+
+
+class WebSocketMarketDataProvider:
+    """
+    WebSocket 数据源提供者
+    
+    特点：
+    - 实时推送，低延迟
+    - 自动重连
+    - 与 REST 数据源可切换
+    
+    使用场景：
+    - K线图实时更新（固定使用 WebSocket）
+    - 交易引擎可选数据源
+    """
+    
+    def __init__(self, use_aws: bool = False, fallback_provider: MarketDataProvider = None):
+        """
+        初始化 WebSocket 数据源
+        
+        Args:
+            use_aws: 是否使用 AWS 节点
+            fallback_provider: REST 回退数据源
+        """
+        self.use_aws = use_aws
+        self.fallback_provider = fallback_provider
+        self.ws_client: Optional[OKXWebSocketClient] = None
+        self._subscribed_symbols: Dict[str, str] = {}  # {symbol: timeframe}
+        
+        # 初始化 WebSocket 客户端
+        if WS_IMPORT_OK and WEBSOCKET_AVAILABLE:
+            self.ws_client = get_ws_client(use_aws)
+        else:
+            logger.warning("[WS-Provider] WebSocket 不可用，将使用 REST 回退")
+    
+    def start(self) -> bool:
+        """启动 WebSocket 连接"""
+        if self.ws_client:
+            return self.ws_client.start()
+        return False
+    
+    def stop(self):
+        """停止 WebSocket 连接"""
+        if self.ws_client:
+            self.ws_client.stop()
+    
+    def is_connected(self) -> bool:
+        """检查是否已连接"""
+        return self.ws_client and self.ws_client.is_connected()
+    
+    def subscribe(self, symbol: str, timeframe: str = "1m") -> bool:
+        """
+        订阅 K线数据
+        
+        Args:
+            symbol: 交易对
+            timeframe: 时间周期
+        
+        Returns:
+            是否订阅成功
+        """
+        if not self.ws_client:
+            return False
+        
+        # 确保连接
+        if not self.ws_client.is_connected():
+            if not self.ws_client.start():
+                logger.warning(f"[WS-Provider] 无法连接，订阅失败: {symbol}")
+                return False
+        
+        # 订阅 K线
+        success = self.ws_client.subscribe_candles(symbol, timeframe)
+        if success:
+            self._subscribed_symbols[symbol] = timeframe
+        
+        return success
+    
+    def unsubscribe(self, symbol: str) -> bool:
+        """取消订阅"""
+        if not self.ws_client:
+            return False
+        
+        timeframe = self._subscribed_symbols.get(symbol, "1m")
+        success = self.ws_client.unsubscribe(symbol, "candle", timeframe)
+        
+        if symbol in self._subscribed_symbols:
+            del self._subscribed_symbols[symbol]
+        
+        return success
+    
+    def get_ohlcv(
+        self, 
+        symbol: str, 
+        timeframe: str = "1m", 
+        limit: int = 500,
+        fallback_to_rest: bool = True
+    ) -> Tuple[list, bool]:
+        """
+        获取 K线数据
+        
+        优先使用 WebSocket 缓存，不足时回退到 REST
+        
+        Args:
+            symbol: 交易对
+            timeframe: 时间周期
+            limit: 数量限制
+            fallback_to_rest: 是否回退到 REST
+        
+        Returns:
+            (K线数据, is_from_ws) 元组
+        """
+        # 尝试从 WebSocket 获取
+        if self.ws_client and self.ws_client.is_connected():
+            # 确保已订阅
+            if symbol not in self._subscribed_symbols:
+                self.subscribe(symbol, timeframe)
+                # 等待一小段时间让数据到达
+                time.sleep(0.5)
+            
+            ws_data = self.ws_client.get_candles(symbol, timeframe, limit)
+            
+            # WebSocket 数据足够
+            if ws_data and len(ws_data) >= min(limit, 50):
+                logger.debug(f"[WS-Provider] 使用 WebSocket 数据: {symbol} {len(ws_data)} bars")
+                return ws_data, True
+            
+            # WebSocket 数据不足，需要补充
+            if ws_data and len(ws_data) > 0:
+                logger.debug(f"[WS-Provider] WebSocket 数据不足 ({len(ws_data)}/{limit})，需要补充")
+        
+        # 回退到 REST
+        if fallback_to_rest and self.fallback_provider:
+            logger.debug(f"[WS-Provider] 回退到 REST: {symbol}")
+            data, is_stale = self.fallback_provider.get_ohlcv(symbol, timeframe, limit)
+            return data, False
+        
+        # 无数据
+        return [], False
+    
+    def get_ticker(self, symbol: str, fallback_to_rest: bool = True) -> Optional[Dict]:
+        """
+        获取实时行情
+        
+        Args:
+            symbol: 交易对
+            fallback_to_rest: 是否回退到 REST
+        
+        Returns:
+            行情数据
+        """
+        # 尝试从 WebSocket 获取
+        if self.ws_client and self.ws_client.is_connected():
+            ticker = self.ws_client.get_ticker(symbol)
+            if ticker:
+                return ticker
+        
+        # 回退到 REST
+        if fallback_to_rest and self.fallback_provider:
+            return self.fallback_provider.get_ticker(symbol)
+        
+        return None
+    
+    def get_last_price(self, symbol: str) -> Optional[float]:
+        """获取最新价格"""
+        ticker = self.get_ticker(symbol)
+        if ticker:
+            return ticker.get("last")
+        return None
+    
+    def get_stats(self) -> Dict:
+        """获取统计信息"""
+        stats = {
+            "ws_available": WS_IMPORT_OK and WEBSOCKET_AVAILABLE,
+            "ws_connected": self.is_connected(),
+            "subscribed_symbols": list(self._subscribed_symbols.keys()),
+            "has_fallback": self.fallback_provider is not None
+        }
+        
+        if self.ws_client:
+            stats.update(self.ws_client.get_cache_stats())
+        
+        return stats
+
+
+def create_hybrid_market_data_provider(
+    exchange_adapter,
+    timeframe: str = '1m',
+    ohlcv_limit: int = 1000,
+    enable_websocket: bool = False,
+    use_aws: bool = False,
+    **kwargs
+) -> Tuple[MarketDataProvider, Optional[WebSocketMarketDataProvider]]:
+    """
+    创建混合数据源提供者
+    
+    返回 REST 和 WebSocket 两个提供者，可根据配置切换
+    
+    Args:
+        exchange_adapter: 交易所适配器
+        timeframe: 默认时间周期
+        ohlcv_limit: 默认 K线数量
+        enable_websocket: 是否启用 WebSocket
+        use_aws: WebSocket 是否使用 AWS 节点
+        **kwargs: 其他参数
+    
+    Returns:
+        (rest_provider, ws_provider) 元组
+    """
+    # 创建 REST 提供者
+    rest_provider = MarketDataProvider(
+        exchange_adapter=exchange_adapter,
+        timeframe=timeframe,
+        ohlcv_limit=ohlcv_limit,
+        **kwargs
+    )
+    
+    # 创建 WebSocket 提供者（如果启用）
+    ws_provider = None
+    if enable_websocket and WS_IMPORT_OK and WEBSOCKET_AVAILABLE:
+        ws_provider = WebSocketMarketDataProvider(
+            use_aws=use_aws,
+            fallback_provider=rest_provider
+        )
+        logger.info("[Hybrid] WebSocket 数据源已创建")
+    
+    return rest_provider, ws_provider

@@ -97,20 +97,25 @@ class HedgeManager:
         if not main_pos or hedge_list:
             return False, 0.0, ""
         
-        # 计算主仓浮盈
+        # 计算主仓浮盈（带杠杆）
         pnl = self.calculate_position_pnl(main_pos, current_price)
         
-        # 计算本金（杠杆前）
-        position_value = main_pos.get('qty', 0) * main_pos.get('entry_price', 0)
-        margin = position_value / self.leverage
+        # 计算本金收益率（不带杠杆）
+        # 🔥 修复：硬止盈应该基于本金收益率，而不是杠杆收益率
+        # 本金收益率 = (当前价格 - 入场价格) / 入场价格
+        entry_price = main_pos.get('entry_price', 0)
+        pos_side = main_pos.get('pos_side', 'long')
         
-        if margin <= 0:
+        if entry_price <= 0:
             return False, 0.0, ""
         
-        # 计算收益率（基于本金）
-        roi = pnl / margin
+        # 计算本金收益率（不带杠杆）
+        if pos_side == 'long':
+            roi = (current_price - entry_price) / entry_price
+        else:  # short
+            roi = (entry_price - current_price) / entry_price
         
-        # 检查是否达到硬止盈条件
+        # 检查是否达到硬止盈条件（基于本金收益率）
         if roi >= self.hard_tp_pct:
             reason = f"硬止盈触发: ROI={roi*100:.2f}% >= {self.hard_tp_pct*100:.1f}%"
             return True, pnl, reason
@@ -264,6 +269,27 @@ class HedgeManager:
             
             # 删除数据库记录
             self.db.delete_paper_position(symbol, main_pos.get('pos_side'))
+            
+            # 🔥 更新模拟账户余额（平仓后释放保证金 + 盈亏）
+            if run_mode != 'live':
+                try:
+                    paper_bal = self.db.get_paper_balance()
+                    current_equity = float(paper_bal.get('equity', 0) or 0)
+                    current_available = float(paper_bal.get('available', 0) or 0)
+                    
+                    # 计算释放的保证金
+                    position_value = main_pos.get('qty', 0) * main_pos.get('entry_price', 0)
+                    margin_released = position_value / self.leverage
+                    
+                    # 更新余额：equity += pnl, available += margin + pnl
+                    new_equity = current_equity + pnl
+                    new_available = current_available + margin_released + pnl
+                    
+                    self.db.update_paper_balance(equity=new_equity, available=new_available)
+                    logger.info(f"模拟账户更新: 释放保证金=${margin_released:.2f}, PnL=${pnl:.2f}")
+                except Exception as e:
+                    logger.error(f"更新模拟余额失败: {e}")
+            
             logger.info(f"已平主仓 {symbol} {main_pos.get('pos_side')} | PnL: ${pnl:.2f}")
         
         # 平所有对冲仓
@@ -286,6 +312,26 @@ class HedgeManager:
             
             # 删除数据库记录
             self.db.delete_hedge_position(hedge_pos.get('id'))
+            
+            # 🔥 更新模拟账户余额（平仓后释放保证金 + 盈亏）
+            if run_mode != 'live':
+                try:
+                    paper_bal = self.db.get_paper_balance()
+                    current_equity = float(paper_bal.get('equity', 0) or 0)
+                    current_available = float(paper_bal.get('available', 0) or 0)
+                    
+                    # 计算释放的保证金
+                    position_value = hedge_pos.get('qty', 0) * hedge_pos.get('entry_price', 0)
+                    margin_released = position_value / self.leverage
+                    
+                    # 更新余额
+                    new_equity = current_equity + pnl
+                    new_available = current_available + margin_released + pnl
+                    
+                    self.db.update_paper_balance(equity=new_equity, available=new_available)
+                except Exception as e:
+                    logger.error(f"更新模拟余额失败: {e}")
+            
             logger.info(f"已平对冲仓 {symbol} {hedge_pos.get('pos_side')} | PnL: ${pnl:.2f}")
         
         return True, total_pnl, f"全仓平仓完成 | 总PnL: ${total_pnl:.2f}"
@@ -323,6 +369,23 @@ class HedgeManager:
                     logger.error(f"解对冲失败: {e}")
             
             self.db.delete_hedge_position(hedge_pos.get('id'))
+            
+            # 🔥 更新模拟账户余额（平仓后释放保证金 + 盈亏）
+            if run_mode != 'live':
+                try:
+                    paper_bal = self.db.get_paper_balance()
+                    current_equity = float(paper_bal.get('equity', 0) or 0)
+                    current_available = float(paper_bal.get('available', 0) or 0)
+                    
+                    position_value = hedge_pos.get('qty', 0) * hedge_pos.get('entry_price', 0)
+                    margin_released = position_value / self.leverage
+                    
+                    new_equity = current_equity + pnl
+                    new_available = current_available + margin_released + pnl
+                    
+                    self.db.update_paper_balance(equity=new_equity, available=new_available)
+                except Exception as e:
+                    logger.error(f"更新模拟余额失败: {e}")
         
         return True, total_hedge_pnl, f"解对冲完成 | 平仓{len(hedge_list)}个对冲仓 | PnL: ${total_hedge_pnl:.2f}"
     

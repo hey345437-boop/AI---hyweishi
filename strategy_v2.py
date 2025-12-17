@@ -124,8 +124,21 @@ class TradingStrategy:
         计算所有技术指标
         输入 df 必须包含: open, high, low, close, volume
         """
-        if len(df) < 1000:
-            raise ValueError("数据不足，至少需要 1000 根 K 线（消除EMA/RMA初始化误差）")
+        # 🔥 修复：降低最小K线要求，支持新上线币种
+        # 理想情况需要 1000 根以消除 EMA/RMA 初始化误差
+        # 但对于新币种，接受最少 200 根（会有一定误差但可用）
+        MIN_BARS_IDEAL = 1000
+        MIN_BARS_ACCEPTABLE = 200
+        
+        if len(df) < MIN_BARS_ACCEPTABLE:
+            raise ValueError(f"数据不足，至少需要 {MIN_BARS_ACCEPTABLE} 根 K 线（当前: {len(df)}）")
+        
+        if len(df) < MIN_BARS_IDEAL:
+            # 数据不足理想值，打印警告但继续计算
+            import logging
+            logging.getLogger(__name__).warning(
+                f"K线数量 ({len(df)}) 少于理想值 ({MIN_BARS_IDEAL})，指标可能存在初始化误差"
+            )
         
         # === 1. Stochastic %K ===
         lowest_low = df['low'].rolling(window=self.k_period).min()
@@ -141,37 +154,44 @@ class TradingStrategy:
         df['pd'] = self.bcwsma(df['pk'], self.kdj_isig, 1)
         
         # === 3. OBV-ADX (完全按照Pine Script逻辑) ===
-        # 计算OBV
+        # 🔥 TradingView: ta.obv 是内置的累积OBV
+        # Pine Script: up_bottom = ta.change(ta.obv), down_bottom = -ta.change(ta.obv)
         obv = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
         
         # 🔥 修复：完全按照Pine Script的OBV-ADX计算
+        # ta.change(ta.obv) = obv - obv[1]
         up_bottom = obv.diff()
         down_bottom = -obv.diff()
         
         # 处理plusDM和minusDM的逻辑
+        # Pine: plusDM_bottom = na(up_bottom) ? na : up_bottom > down_bottom and up_bottom > 0 ? up_bottom : 0
         plusDM_bottom = pd.Series(np.where(
             (up_bottom > down_bottom) & (up_bottom > 0), 
             up_bottom, 
             0
         ), index=df.index)
         
+        # Pine: minusDM_bottom = na(down_bottom) ? na : down_bottom > up_bottom and down_bottom > 0 ? down_bottom : 0
         minusDM_bottom = pd.Series(np.where(
             (down_bottom > up_bottom) & (down_bottom > 0), 
             down_bottom, 
             0
         ), index=df.index)
         
-        # 计算trur (标准差的RMA)
-        tr_ur = self.calculate_rma(obv.rolling(self.obv_len).std(), self.obv_len).replace(0, 1e-10)
+        # 🔥 计算trur: ta.rma(ta.stdev(ta.obv, len_bottom), len_bottom)
+        # TradingView ta.stdev 使用样本标准差 (ddof=1)，pandas rolling().std() 默认也是 ddof=1
+        obv_stdev = obv.rolling(self.obv_len).std(ddof=1)  # 显式指定 ddof=1
+        tr_ur = self.calculate_rma(obv_stdev.fillna(0), self.obv_len).replace(0, 1e-10)
         
-        # 计算plus和minus
+        # 🔥 计算plus和minus: 100 * ta.ema(plusDM_bottom, len_bottom) / trur_bottom
         plus_bottom = 100 * self.calculate_ema(plusDM_bottom, self.obv_len) / tr_ur
         minus_bottom = 100 * self.calculate_ema(minusDM_bottom, self.obv_len) / tr_ur
         
-        # 处理NaN值 (对应fixnan)
-        plus_bottom = plus_bottom.fillna(0)
-        minus_bottom = minus_bottom.fillna(0)
+        # 🔥 处理NaN值 (对应 fixnan - 用前一个有效值填充)
+        plus_bottom = plus_bottom.ffill().fillna(0)
+        minus_bottom = minus_bottom.ffill().fillna(0)
         
+        # 🔥 计算ADX: 100 * ta.ema(abs(plus - minus) / sum, lensig)
         sum_bottom = plus_bottom + minus_bottom
         sum_bottom = sum_bottom.replace(0, 1)  # 避免除零
         adx_bottom = 100 * self.calculate_ema(abs(plus_bottom - minus_bottom) / sum_bottom, self.obv_sig)
@@ -512,17 +532,18 @@ class TradingStrategy:
         if df['rsi'].isnull().all():
             raise ValueError("RSI column contains all NaN values, calculation failed")
         
-        # 🔥 激进模式：使用当前正在跳动的K线（59秒抢跑）
-        # 确保数据长度足够（至少3根K线）
-        if len(df) < 3:
-            return {"action": "HOLD", "reason": "数据不足（需至少3根K线）", "type": "NONE"}
+        # 🔥 00秒确认模式：使用已收盘的K线数据
+        # 确保数据长度足够（至少4根K线）
+        if len(df) < 4:
+            return {"action": "HOLD", "reason": "数据不足（需至少4根K线）", "type": "NONE"}
         
-        # 🔥 使用未收盘的K线计算信号（59秒时K线即将收盘，数据基本稳定）
-        # df.iloc[-1] 是当前正在形成的K线（未收线，用于抢跑）
-        # df.iloc[-2] 是上一根已收盘的K线
-        curr = df.iloc[-1]   # 当前正在跳动的K线（59秒抢跑）
-        prev = df.iloc[-2]   # 上一根已收盘的K线
-        prev2 = df.iloc[-3]  # 上上根K线
+        # 🔥 00秒确认模式（与TradingView收盘触发一致）
+        # df.iloc[-1] 是刚开盘的新K线（只有几秒数据，不使用）
+        # df.iloc[-2] 是刚收盘的K线（这是我们要判断的"当前K线"）
+        # df.iloc[-3] 是上一根已收盘的K线
+        curr = df.iloc[-2]   # 刚收盘的K线（与TradingView一致）
+        prev = df.iloc[-3]   # 上一根已收盘的K线
+        prev2 = df.iloc[-4]  # 上上根K线
         
         # 🔥 安全访问 RSI 值，提供默认值
         curr_rsi = curr.get('rsi', 50.0)
@@ -553,7 +574,7 @@ class TradingStrategy:
         trend_buy = trend_filter and bullish_trend and long_cond
         trend_sell = trend_filter and bearish_trend and short_cond
         
-        # === 何以为底信号 (简化平衡版本) ===
+        # === 何以为底信号 (完整实现，包含扩展信号) ===
         stoch_os = curr['stoch_k'] < 20
         stoch_ob = curr['stoch_k'] > 80
         kdj_gold = (prev['pk'] < prev['pd']) and (curr['pk'] > curr['pd'])
@@ -561,13 +582,49 @@ class TradingStrategy:
         smi_kdj_buy = stoch_os and kdj_gold
         smi_kdj_sell = stoch_ob and kdj_dead
         
-        # 🔥 修复：完全按照Pine Script的OBV-ADX信号条件
+        # 🔥 OBV-ADX 信号条件
         obv_buy = (curr['obv_minus'] >= 22) and (curr['obv_adx'] >= 22) and (curr['obv_plus'] <= 18)
         obv_sell = (curr['obv_plus'] >= 22) and (curr['obv_adx'] >= 22) and (curr['obv_minus'] <= 18)
         
-        # 🔥 简化：只使用基础信号，平衡模式
-        bottom_buy = smi_kdj_buy and obv_buy
-        bottom_sell = smi_kdj_sell and obv_sell
+        # 🔥 基础信号：KDJ + OBV 同时满足
+        basic_buy_signal = smi_kdj_buy and obv_buy
+        basic_sell_signal = smi_kdj_sell and obv_sell
+        
+        # 🔥 扩展信号逻辑（平衡模式）- 完全对齐TradingView逻辑
+        # TradingView: 记录OBV信号出现的bar_index，当前bar与该bar距离 <= choose_bottom 时触发
+        # Python: 向前回溯检查最近 choose_bottom+1 根K线内是否有OBV信号
+        extended_buy_signal = False
+        extended_sell_signal = False
+        
+        if self.more_bottom and len(df) >= 4:
+            # 🔥 修复：TradingView的逻辑是 (bar_index - obv_buy_bar_bottom) <= choose_bottom
+            # 这意味着：当前K线(bar_index) 与 OBV信号K线(obv_buy_bar_bottom) 的距离 <= choose_bottom
+            # 距离为0表示同一根K线，距离为1表示相邻K线
+            # 所以回溯范围是 [0, choose_bottom]，共 choose_bottom+1 根K线
+            
+            # 当前K线索引是 -2（00秒确认模式）
+            # 回溯范围：当前K线(-2) 到 当前K线-choose_bottom(-2-choose_bottom)
+            for lookback in range(0, self.choose_bottom + 1):  # 0 到 choose_bottom
+                check_idx = -(2 + lookback)  # -2, -3, -4, ... 
+                if len(df) >= abs(check_idx):
+                    past = df.iloc[check_idx]
+                    past_obv_buy = (past['obv_minus'] >= 22) and (past['obv_adx'] >= 22) and (past['obv_plus'] <= 18)
+                    if past_obv_buy and smi_kdj_buy:
+                        extended_buy_signal = True
+                        break
+            
+            for lookback in range(0, self.choose_bottom + 1):
+                check_idx = -(2 + lookback)
+                if len(df) >= abs(check_idx):
+                    past = df.iloc[check_idx]
+                    past_obv_sell = (past['obv_plus'] >= 22) and (past['obv_adx'] >= 22) and (past['obv_minus'] <= 18)
+                    if past_obv_sell and smi_kdj_sell:
+                        extended_sell_signal = True
+                        break
+        
+        # 🔥 组合信号：基础信号 OR 扩展信号
+        bottom_buy = basic_buy_signal or extended_buy_signal
+        bottom_sell = basic_sell_signal or extended_sell_signal
         
         # === 订单块信号检测 ===
         # 🔥 注意：订单块已经包含 ATR * 0.1 的扩展，不需要额外加 buffer
@@ -705,12 +762,33 @@ class TradingStrategy:
             "reason": "无有效信号"
         }
     
-    def risk_check(self, current_equity, current_position_value, proposed_trade_value):
-        """风控检查"""
-        new_total = current_position_value + proposed_trade_value
-        max_allowed = current_equity * self.max_total_position_pct * self.max_leverage
-        if new_total > max_allowed:
-            return False, f"风控拒绝: 新仓位 {new_total:.2f} 超过限额 {max_allowed:.2f}"
+    def risk_check(self, current_equity, current_position_notional, proposed_notional):
+        """
+        风控检查 - 使用名义价值 (Notional Value)
+        
+        🔥 重要修复：
+        - 之前的 BUG：使用 max_total_position_pct * max_leverage 计算限额
+          这会导致 10% × 50x = 500% 的限额，完全失效
+        - 正确逻辑：总名义价值 <= 权益 × max_total_position_pct (10%)
+        
+        Args:
+            current_equity: 当前账户权益
+            current_position_notional: 当前持仓名义价值（不是保证金！）
+            proposed_notional: 拟开仓的名义价值
+        
+        Returns:
+            (bool, str): (是否通过, 原因)
+        """
+        new_total_notional = current_position_notional + proposed_notional
+        # 🔥 修复：最大允许名义价值 = 权益 × 10%（不乘杠杆！）
+        max_allowed_notional = current_equity * self.max_total_position_pct
+        
+        if new_total_notional > max_allowed_notional:
+            return False, (
+                f"风控拒绝: 持仓名义价值 {current_position_notional:.2f} + "
+                f"拟开仓 {proposed_notional:.2f} = {new_total_notional:.2f} > "
+                f"限额 {max_allowed_notional:.2f} (权益 {current_equity:.2f} × 10%)"
+            )
         return True, "通过"
     
     def run_analysis_with_data(self, symbol, preloaded_data, due_tfs):
@@ -769,11 +847,11 @@ class TradingStrategy:
                 else:
                     rsi_val = 50.0
                 
-                # 🔥 获取K线时间戳（使用当前K线，与信号计算一致）
-                # 因为信号是基于 df.iloc[-1] 计算的，所以去重也用 df.iloc[-1] 的时间戳
+                # 🔥 获取K线时间戳（使用已收盘的K线，与信号计算一致）
+                # 因为信号是基于 df.iloc[-2] 计算的（00秒确认模式），所以去重也用 df.iloc[-2] 的时间戳
                 candle_time = None
-                if len(df_with_indicators) >= 1:
-                    candle_time = df_with_indicators.iloc[-1]['timestamp']
+                if len(df_with_indicators) >= 2:
+                    candle_time = df_with_indicators.iloc[-2]['timestamp']
                 
                 scan_results.append({
                     "tf": tf,

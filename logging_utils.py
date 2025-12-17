@@ -150,6 +150,8 @@ def render_scan_block(
     risk_status: str = "",
     equity: float = 0.0,
     remaining_base: float = 0.0,
+    total_base_used: float = 0.0,
+    total_margin: float = 0.0,
     signals: list = None,
     orders: list = None,
     elapsed_sec: float = 0.0,
@@ -165,7 +167,7 @@ def render_scan_block(
     🚀 [21:30:59] 触发扫描 | 周期: ['1m'] | 币种: 3
        ✅ 价格获取成功: 3/3
        🛡️ 使用缓存的预风控结果: 可开新主仓
-       💰 账户权益: $200.00 | 剩余可用本金: $20.00
+       💰 账户权益: $200.00 | 已用保证金: $1.74 | 剩余额度: $18.26
        🎯 [BTC/USDT:USDT] 发现信号: [1m] LONG (TREND_REVERSAL)
        ✅ BTC/USDT:USDT LONG @ $45000.00 (TREND_REVERSAL)
     ✅ 本轮扫描完成 | 耗时: 2.00s | 信号: 1 | 订单: 1
@@ -178,7 +180,9 @@ def render_scan_block(
     - price_ok: 价格获取成功数量
     - risk_status: 风控状态描述
     - equity: 账户权益
-    - remaining_base: 剩余可用本金
+    - remaining_base: 剩余可用保证金额度
+    - total_base_used: 仓位总名义价值（已弃用，保留兼容）
+    - total_margin: 已用保证金（🔥 核心字段，用于风控显示）
     - signals: 信号列表 [{'symbol': ..., 'tf': ..., 'action': ..., 'type': ...}, ...]
     - orders: 订单列表 [{'symbol': ..., 'action': ..., 'price': ..., 'type': ..., 'is_hedge': ...}, ...]
     - elapsed_sec: 扫描耗时（秒）
@@ -201,7 +205,9 @@ def render_scan_block(
         lines.append(f"   🛡️ 使用缓存的预风控结果: {risk_status}")
     
     if equity > 0:
-        lines.append(f"   💰 账户权益: ${equity:.2f} | 剩余可用本金: ${remaining_base:.2f}")
+        # 🔥 使用 total_margin（已用保证金）而非 total_base_used（名义价值）
+        display_margin = total_margin if total_margin > 0 else total_base_used
+        lines.append(f"   💰 账户权益: ${equity:.2f} | 已用保证金: ${display_margin:.2f} | 剩余额度: ${remaining_base:.2f}")
     
     # 信号（只有发现信号时才显示）
     for sig in signals:
@@ -218,11 +224,14 @@ def render_scan_block(
         price = order.get('price', 0)
         order_type = order.get('type', '-')
         is_hedge = order.get('is_hedge', False)
+        entry_time = order.get('entry_time', '')  # 🔥 入场时间（精确到毫秒）
+        
+        time_str_display = f" | 入场: {entry_time}" if entry_time else ""
         
         if is_hedge:
-            lines.append(f"   🛡️ {symbol} HEDGE {action} @ ${price:.4f} ({order_type})")
+            lines.append(f"   🛡️ {symbol} HEDGE {action} @ ${price:.4f} ({order_type}){time_str_display}")
         else:
-            lines.append(f"   ✅ {symbol} {action} @ ${price:.4f} ({order_type})")
+            lines.append(f"   ✅ {symbol} {action} @ ${price:.4f} ({order_type}){time_str_display}")
     
     # 扫描结束块（1行）
     lines.append(f"✅ 本轮扫描完成 | 耗时: {elapsed_sec:.2f}s | 信号: {len(signals)} | 订单: {len(orders)}")

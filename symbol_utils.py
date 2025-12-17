@@ -7,16 +7,67 @@ from typing import Optional, List, Tuple, Set
 # 统一输出格式: CCXT swap 统一 symbol，如 "BTC/USDT:USDT"
 # 这是 ccxt 对 OKX 永续合约的标准格式
 
-# P2修复: 币种白名单（高流动性主流币种）
+# 🔥 动态白名单：从 Market API 获取成交量前100的币种
+# 缓存机制：避免频繁请求
+import time
+import requests
+import os
+
+_WHITELIST_CACHE: Set[str] = set()
+_WHITELIST_CACHE_TIME: float = 0
+_WHITELIST_CACHE_TTL: int = 300  # 缓存5分钟
+
+MARKET_API_URL = os.getenv("MARKET_API_URL", "http://127.0.0.1:8000")
+
+def _fetch_dynamic_whitelist() -> Set[str]:
+    """从 Market API 获取成交量前100的币种"""
+    global _WHITELIST_CACHE, _WHITELIST_CACHE_TIME
+    
+    now = time.time()
+    
+    # 检查缓存是否有效
+    if _WHITELIST_CACHE and (now - _WHITELIST_CACHE_TIME) < _WHITELIST_CACHE_TTL:
+        return _WHITELIST_CACHE
+    
+    try:
+        response = requests.get(f"{MARKET_API_URL}/symbols?top=100", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            symbols = data.get('symbols', [])
+            # 提取 base currency (如 "BTC/USDT:USDT" -> "BTC")
+            whitelist = set()
+            for sym in symbols:
+                if '/' in sym:
+                    base = sym.split('/')[0]
+                    whitelist.add(base.upper())
+            
+            if whitelist:
+                _WHITELIST_CACHE = whitelist
+                _WHITELIST_CACHE_TIME = now
+                return whitelist
+    except Exception:
+        pass
+    
+    # 回退到静态白名单
+    return {
+        "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK", "MATIC",
+        "LTC", "BCH", "UNI", "ATOM", "ETC", "XLM", "FIL", "APT", "ARB", "OP"
+    }
+
+# 兼容旧代码的静态白名单（回退用）
 SYMBOL_WHITELIST: Set[str] = {
     "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK", "MATIC",
-    "LTC", "BCH", "UNI", "ATOM", "ETC", "XLM", "FIL", "APT", "ARB", "OP",
-    "NEAR", "INJ", "TIA", "SEI", "SUI", "PEPE", "WIF", "BONK", "ORDI", "STX"
+    "LTC", "BCH", "UNI", "ATOM", "ETC", "XLM", "FIL", "APT", "ARB", "OP"
 }
 
 def is_symbol_whitelisted(base_currency: str) -> bool:
-    """检查币种是否在白名单中"""
-    return base_currency.upper() in SYMBOL_WHITELIST
+    """检查币种是否在白名单中（动态获取）"""
+    whitelist = _fetch_dynamic_whitelist()
+    return base_currency.upper() in whitelist
+
+def get_whitelist() -> Set[str]:
+    """获取当前白名单"""
+    return _fetch_dynamic_whitelist()
 
 def normalize_symbol(raw: str, market_type: str = 'swap', quote: str = 'USDT') -> str:
     """

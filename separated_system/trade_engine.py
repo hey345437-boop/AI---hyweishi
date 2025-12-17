@@ -108,6 +108,15 @@ from logging_utils import setup_logger, get_logger, render_scan_block, render_id
 from exchange_adapters.factory import ExchangeAdapterFactory
 from market_data_provider import MarketDataProvider
 
+# 🔥 WebSocket 数据源支持
+try:
+    from market_data_provider import WebSocketMarketDataProvider, create_hybrid_market_data_provider
+    from okx_websocket import is_ws_available, start_ws_client, stop_ws_client
+    WS_AVAILABLE = is_ws_available()
+except ImportError:
+    WS_AVAILABLE = False
+    WebSocketMarketDataProvider = None
+
 # P1修复: 导入风控模块
 from risk_control import RiskControlModule, RiskControlConfig
 
@@ -219,12 +228,21 @@ def simulate_fill(order: dict, last_price: float, db_config=None) -> dict:
     """模拟撮合引擎
     
     Args:
-        order: 订单信息字典
+        order: 订单信息字典，必须包含:
+            - symbol: 交易对
+            - side: 'buy' 或 'sell'
+            - amount: 下单数量（币数量）
+            - posSide: 'long' 或 'short'
+            - leverage: 杠杆倍数（可选，默认20）
         last_price: 最近成交价
         db_config: 数据库配置
     
     Returns:
         包含balance、positions和fill信息的字典
+    
+    🔥 核心修复：
+    - 开仓时扣除的是保证金（margin = notional / leverage），不是名义价值
+    - 平仓时释放保证金并结算盈亏
     """
     # 获取当前模拟余额
     balance = get_paper_balance(db_config)
@@ -235,21 +253,26 @@ def simulate_fill(order: dict, last_price: float, db_config=None) -> dict:
     pos_side = order['posSide']
     current_pos = get_paper_position(symbol, pos_side, db_config)
     
+    # 🔥 获取杠杆倍数（从订单或默认值）
+    leverage = order.get('leverage', 20)
+    
     # 计算成交金额
     qty = order['amount']
     price = last_price
-    amount = qty * price
-    fee = amount * 0.0002  # 假设0.02%的手续费
+    notional = qty * price  # 🔥 名义价值
+    margin = notional / leverage  # 🔥 保证金 = 名义价值 / 杠杆
+    fee = notional * 0.0002  # 手续费基于名义价值（0.02%）
     
-    # 计算可用资金变化
+    # 🔥 计算可用资金变化（使用保证金，不是名义价值）
     if order['side'] == 'buy':
-        # 买入需要扣除资金
-        if available < amount + fee:
-            raise ValueError(f"可用资金不足: {available} < {amount + fee}")
-        new_available = available - amount - fee
+        # 开仓：扣除保证金 + 手续费
+        required = margin + fee
+        if available < required:
+            raise ValueError(f"可用资金不足: ${available:.2f} < 所需保证金 ${margin:.2f} + 手续费 ${fee:.2f} = ${required:.2f}")
+        new_available = available - required
     else:
-        # 卖出获得资金
-        new_available = available + amount - fee
+        # 平仓：释放保证金 + 盈亏 - 手续费
+        new_available = available + margin - fee  # 先释放保证金，盈亏在后面计算
     
     # 更新持仓
     new_positions = {}
@@ -306,10 +329,30 @@ def simulate_fill(order: dict, last_price: float, db_config=None) -> dict:
         new_positions[pos_key] = new_pos
     
     # 更新余额
+    # 🔥 修复：equity（权益）= available（可用）+ 持仓价值
+    # 开仓时：available 减少（扣除保证金），但 equity 只减少手续费
+    # 平仓时：available 增加（释放保证金 + 盈亏），equity 变化 = 盈亏 - 手续费
+    current_equity = balance.get('equity', available)
+    
+    if order['side'] == 'buy':
+        # 开仓：equity 只减少手续费（资金从 available 转移到持仓，不是消失）
+        new_equity = current_equity - fee
+    else:
+        # 平仓：equity 变化 = 盈亏 - 手续费
+        if current_pos:
+            current_entry = current_pos.get('entry_price', 0.0)
+            current_qty = current_pos.get('qty', 0.0)
+            close_qty = min(qty, current_qty)
+            realized_pnl = close_qty * (price - current_entry)
+            new_equity = current_equity + realized_pnl - fee
+        else:
+            # 做空开仓
+            new_equity = current_equity - fee
+    
     new_balance = {
         'id': balance.get('id', 1),
         'currency': balance.get('currency', 'USDT'),
-        'equity': new_available,
+        'equity': new_equity,
         'available': new_available,
         'updated_at': int(time.time())
     }
@@ -402,6 +445,55 @@ def main():
     
     logger.debug(f"初始配置: run_mode={run_mode}, symbols={list(TRADE_SYMBOLS.keys())}, enable_trading={enable_trading}")
     
+    # 🔥 OKX 支持的币种缓存（延迟加载）
+    _okx_supported_symbols = None
+    
+    def validate_symbols_against_okx(symbols_dict: dict, exchange_adapter) -> dict:
+        """
+        验证交易对是否被 OKX 支持，自动剔除不支持的币种
+        
+        Args:
+            symbols_dict: 交易对字典 {symbol: {}}
+            exchange_adapter: 交易所适配器
+        
+        Returns:
+            过滤后的交易对字典
+        """
+        nonlocal _okx_supported_symbols
+        
+        if not exchange_adapter:
+            return symbols_dict
+        
+        # 延迟加载 OKX 支持的币种列表
+        if _okx_supported_symbols is None:
+            try:
+                # 获取交易所支持的所有市场
+                markets = exchange_adapter.exchange.load_markets() if hasattr(exchange_adapter, 'exchange') else {}
+                _okx_supported_symbols = set(markets.keys())
+                logger.info(f"[OKX] 已加载 {len(_okx_supported_symbols)} 个支持的交易对")
+            except Exception as e:
+                logger.warning(f"[OKX] 加载市场列表失败: {e}，跳过币种验证")
+                return symbols_dict
+        
+        # 过滤不支持的币种
+        valid_symbols = {}
+        invalid_symbols = []
+        
+        for symbol in symbols_dict.keys():
+            if symbol in _okx_supported_symbols:
+                valid_symbols[symbol] = symbols_dict[symbol]
+            else:
+                invalid_symbols.append(symbol)
+        
+        # 打印剔除的币种
+        if invalid_symbols:
+            print(f"\n⚠️ [OKX] 自动剔除 {len(invalid_symbols)} 个不支持的币种:")
+            for sym in invalid_symbols:
+                print(f"   - {sym}")
+            logger.warning(f"[OKX] 剔除不支持的币种: {invalid_symbols}")
+        
+        return valid_symbols
+    
     # 初始化交易所适配器
     exchange = None
     provider = None
@@ -416,8 +508,8 @@ def main():
         # 只有当API密钥都提供时才初始化交易所适配器
         if api_key and api_secret and api_passphrase:
             # 🔥 关键修复：传递 run_mode，禁用 sandbox
-            # run_mode: 'live' = 实盘下单, 'paper_on_real' = 实盘行情+本地模拟
-            # 注意：'sim' 会被 OKXAdapter 自动映射为 'paper_on_real'
+            # run_mode: 'live' = 实盘下单, 'paper' = 实盘行情+本地模拟
+            # 注意：'sim', 'paper_on_real' 会被 OKXAdapter 自动映射为 'paper'
             exchange_config = {
                 "exchange_type": "okx",
                 "api_key": api_key,
@@ -451,6 +543,26 @@ def main():
                 ohlcv_limit=100  # 默认K线数量
             )
             logger.debug(f"MarketDataProvider初始化成功")
+            
+            # 🔥 初始化 WebSocket 数据源（如果配置启用）
+            ws_provider = None
+            data_source_mode = bot_config.get('data_source_mode', 'REST')
+            if data_source_mode == 'WebSocket' and WS_AVAILABLE:
+                try:
+                    ws_provider = WebSocketMarketDataProvider(
+                        use_aws=False,
+                        fallback_provider=provider
+                    )
+                    if ws_provider.start():
+                        logger.info("[WS] WebSocket 数据源已启动")
+                    else:
+                        logger.warning("[WS] WebSocket 启动失败，将使用 REST")
+                        ws_provider = None
+                except Exception as e:
+                    logger.warning(f"[WS] WebSocket 初始化失败: {e}")
+                    ws_provider = None
+            elif data_source_mode == 'WebSocket':
+                logger.warning("[WS] WebSocket 不可用，将使用 REST")
         else:
             logger.debug("API密钥未完全配置，将以模拟模式继续运行")
     except Exception as e:
@@ -471,6 +583,9 @@ def main():
     # 检查exchange和provider是否初始化成功
     if not exchange or not provider:
         logger.warning("交易所或MarketDataProvider未初始化，将使用模拟数据进行测试")
+    else:
+        # 🔥 验证交易池中的币种是否被 OKX 支持，自动剔除不支持的
+        TRADE_SYMBOLS = validate_symbols_against_okx(TRADE_SYMBOLS, exchange)
     
     # 初始化引擎状态
     update_engine_status(
@@ -509,12 +624,23 @@ def main():
     
     # 预风控缓存（线程安全）
     class PreFlightCache:
-        """预检查缓存 - 线程安全的风控状态 + 策略预加载"""
+        """
+        预检查缓存 - 线程安全的风控状态 + 策略预加载
+        
+        🔥 重要修复：使用名义价值 (Notional Value) 而非保证金 (Margin) 进行风控
+        
+        名义价值 = 持仓数量 × 当前价格
+        保证金 = 名义价值 / 杠杆
+        
+        风控规则：总持仓名义价值 <= 权益 × 10%
+        """
         def __init__(self):
             self._lock = threading.Lock()
             # 风控状态
             self.can_open_new = True       # 是否可以开新主仓
-            self.remaining_base = 0.0      # 剩余可用本金
+            self.remaining_notional = 0.0  # 🔥 剩余可用名义价值（修正命名）
+            self.total_notional = 0.0      # 🔥 总持仓名义价值（核心修复）
+            self.total_margin = 0.0        # 已用保证金（仅供参考，不用于风控）
             self.equity = 0.0              # 账户权益
             self.last_check_time = 0       # 上次检查时间
             self.last_check_second = -1    # 上次检查的秒数（避免重复）
@@ -525,10 +651,24 @@ def main():
             self.strategy_meta = None      # 策略元数据
             self.strategy_load_time = 0    # 策略加载时间
         
-        def update(self, can_open: bool, remaining: float, equity: float, reason: str = ""):
+        def update(self, can_open: bool, remaining: float, equity: float, reason: str = "", 
+                   total_notional: float = 0.0, total_margin: float = 0.0):
+            """
+            更新风控状态
+            
+            Args:
+                can_open: 是否可以开新仓
+                remaining: 剩余可用名义价值
+                equity: 账户权益
+                reason: 检查结果原因
+                total_notional: 总持仓名义价值（用于风控判断）
+                total_margin: 已用保证金（仅供参考）
+            """
             with self._lock:
                 self.can_open_new = can_open
-                self.remaining_base = remaining
+                self.remaining_notional = remaining
+                self.total_notional = total_notional
+                self.total_margin = total_margin
                 self.equity = equity
                 self.last_check_time = time.time()
                 self.check_reason = reason
@@ -545,7 +685,11 @@ def main():
             with self._lock:
                 return {
                     'can_open_new': self.can_open_new,
-                    'remaining_base': self.remaining_base,
+                    'remaining_base': self.remaining_notional,  # 兼容旧字段名
+                    'remaining_notional': self.remaining_notional,  # 🔥 新字段名
+                    'total_base_used': self.total_notional,  # 兼容旧字段名
+                    'total_notional': self.total_notional,  # 🔥 新字段名（名义价值）
+                    'total_margin': self.total_margin,  # 🔥 保证金（仅供参考）
                     'equity': self.equity,
                     'last_check_time': self.last_check_time,
                     'check_reason': self.check_reason
@@ -600,40 +744,99 @@ def main():
                         time.sleep(0.5)
                         continue
                     
-                    # 🔥 执行余额和风控检查
+                    # 🔥 热加载杠杆参数（确保风控计算使用最新杠杆）
+                    _trading_params = get_trading_params()
+                    _new_lev = _trading_params.get('leverage', 20)
+                    if _new_lev != max_lev:
+                        max_lev = _new_lev
+                        logger.debug(f"[preflight] 杠杆已更新: {max_lev}x")
+                    
+                    # 🔥🔥🔥 核心修复：使用名义价值 (Notional Value) 进行风控检查 🔥🔥🔥
+                    # 
+                    # 之前的 BUG：使用保证金 (margin = notional / leverage) 进行风控
+                    # 导致 $35 的持仓在 50x 杠杆下只计算为 $0.7，风控完全失效
+                    #
+                    # 正确逻辑：
+                    # - 名义价值 (Notional) = 持仓数量 × 当前价格
+                    # - 风控规则：总名义价值 <= 权益 × 10%
+                    # - 保证金仅供参考，不用于风控判断
                     try:
+                        # 🔥🔥🔥 标准金融字段 🔥🔥🔥
+                        # wallet_balance: 钱包余额（静态）
+                        # unrealized_pnl: 未实现盈亏
+                        # equity: 动态权益 = wallet_balance + unrealized_pnl
+                        # used_margin: 已用保证金
+                        # free_margin: 可用保证金 = equity - used_margin
+                        wallet_balance = 0.0
+                        unrealized_pnl = 0.0
                         equity = 0.0
-                        total_base_used = 0.0
+                        used_margin = 0.0
+                        total_notional = 0.0  # 🔥 总持仓名义价值（用于风控）
                         
-                        if run_mode == 'paper':
-                            # Paper模式：使用本地模拟账户
+                        if run_mode in ('paper', 'sim', 'paper_on_real'):
+                            # Paper/Sim模式：使用本地模拟账户
                             paper_bal = get_paper_balance()
-                            equity = float(paper_bal.get('equity', 0) or 0) if paper_bal else 0
+                            wallet_balance = float(paper_bal.get('wallet_balance', 0) or paper_bal.get('equity', 0) or 0) if paper_bal else 0
+                            unrealized_pnl = float(paper_bal.get('unrealized_pnl', 0) or 0) if paper_bal else 0
                             
-                            if equity == 0:
-                                equity = 200.0  # 默认值
+                            if wallet_balance == 0:
+                                wallet_balance = 200.0  # 默认值
                             
-                            # 计算已用本金
+                            # equity = wallet_balance + unrealized_pnl
+                            equity = wallet_balance + unrealized_pnl
+                            
+                            # 🔥 计算主仓位的名义价值和保证金
                             paper_positions = get_paper_positions()
+                            
+                            # 🔥 调试：打印持仓数量
+                            main_pos_count = len(paper_positions) if paper_positions else 0
+                            logger.info(f"[risk-debug] 主仓数量: {main_pos_count} | 持仓列表: {list(paper_positions.keys()) if paper_positions else []}")
+                            
                             if paper_positions:
                                 for pos_key, pos in paper_positions.items():
                                     qty = float(pos.get('qty', 0) or 0)
                                     entry_price = float(pos.get('entry_price', 0) or 0)
+                                    
+                                    # 🔥 调试：打印每个持仓的原始数据
+                                    logger.info(f"[risk-debug] 持仓 {pos_key}: raw_qty={pos.get('qty')} raw_price={pos.get('entry_price')} parsed_qty={qty} parsed_price={entry_price}")
+                                    
                                     if qty > 0 and entry_price > 0:
-                                        position_value = qty * entry_price
-                                        position_base = position_value / max_lev
-                                        total_base_used += position_base
+                                        # 🔥 名义价值 = 数量 × 价格
+                                        notional = qty * entry_price
+                                        margin = notional / max_lev
+                                        total_notional += notional
+                                        used_margin += margin
+                                        logger.info(f"[risk] 主仓 {pos_key}: qty={qty:.6f} price={entry_price:.2f} notional=${notional:.2f} margin=${margin:.2f}")
                             
-                            # 计算对冲仓位
+                            # 🔥 计算对冲仓位的名义价值和保证金
                             hedge_positions = get_hedge_positions()
+                            
+                            # 🔥 调试：打印对冲仓数量
+                            hedge_pos_count = len(hedge_positions) if hedge_positions else 0
+                            logger.info(f"[risk-debug] 对冲仓数量: {hedge_pos_count}")
+                            
                             if hedge_positions:
                                 for hedge_pos in hedge_positions:
                                     qty = float(hedge_pos.get('qty', 0) or 0)
                                     entry_price = float(hedge_pos.get('entry_price', 0) or 0)
                                     if qty > 0 and entry_price > 0:
-                                        position_value = qty * entry_price
-                                        position_base = position_value / max_lev
-                                        total_base_used += position_base
+                                        # 🔥 名义价值 = 数量 × 价格
+                                        notional = qty * entry_price
+                                        margin = notional / max_lev
+                                        total_notional += notional
+                                        used_margin += margin
+                                        logger.info(f"[risk] 对冲 {hedge_pos.get('symbol', '?')}: qty={qty:.6f} price={entry_price:.2f} notional=${notional:.2f} margin=${margin:.2f}")
+                            
+                            # 🔥 调试汇总：打印最终计算结果
+                            logger.info(f"[risk-debug] 汇总: 主仓={main_pos_count} 对冲={hedge_pos_count} | 总名义价值=${total_notional:.2f} | 总保证金=${used_margin:.2f} | 杠杆={max_lev}x")
+                            
+                            # 🔥 同步标准金融字段到数据库
+                            free_margin = equity - used_margin
+                            update_paper_balance(
+                                wallet_balance=wallet_balance,
+                                unrealized_pnl=unrealized_pnl,
+                                used_margin=used_margin
+                            )
                         else:
                             # Live模式：从交易所获取真实数据
                             if provider is None:
@@ -643,13 +846,18 @@ def main():
                             
                             try:
                                 bal = provider.get_balance()
+                                # 交易所返回的 total 是 equity
                                 equity = float(bal.get('total', {}).get('USDT', 0)) if isinstance(bal, dict) else 0
+                                # 交易所返回的 free 是 free_margin
+                                free_from_exchange = float(bal.get('free', {}).get('USDT', 0)) if isinstance(bal, dict) else 0
+                                # used_margin = equity - free_margin
+                                used_margin = equity - free_from_exchange if free_from_exchange > 0 else 0
                             except Exception as e:
                                 logger.debug(f"[balance-sync] 余额获取失败: {e}")
                                 time.sleep(0.5)
                                 continue
                             
-                            # 获取持仓
+                            # 🔥 获取持仓并计算名义价值
                             try:
                                 positions = provider.get_positions(list(TRADE_SYMBOLS.keys()) if TRADE_SYMBOLS else None)
                                 if positions:
@@ -658,25 +866,42 @@ def main():
                                         if contracts > 0:
                                             mark_price = float(pos.get('markPrice', 0) or pos.get('entryPrice', 0) or 0)
                                             if mark_price > 0:
-                                                position_value = contracts * mark_price
-                                                position_base = position_value / max_lev
-                                                total_base_used += position_base
+                                                # 🔥 名义价值 = 合约数 × 标记价格
+                                                notional = contracts * mark_price
+                                                total_notional += notional
+                                                logger.debug(f"[risk] Live {symbol}: contracts={contracts:.6f} price={mark_price:.2f} notional=${notional:.2f}")
                             except Exception:
                                 pass
                         
-                        # 🔥 风控计算：总本金 < 权益 × 10%
-                        if equity == 0:
-                            preflight_cache.update(False, 0.0, 0.0, "余额为0")
-                        else:
-                            max_allowed_base = equity * 0.10
-                            remaining_base = max_allowed_base - total_base_used
-                            
-                            if total_base_used >= max_allowed_base:
-                                preflight_cache.update(False, 0.0, equity, f"本金已用尽 ({total_base_used:.2f}/{max_allowed_base:.2f})")
-                            else:
-                                preflight_cache.update(True, remaining_base, equity, "OK")
+                        # 🔥🔥🔥 核心风控计算 🔥🔥🔥
+                        # 规则1：已用保证金 <= 权益 × 10%
+                        # 规则2：总名义价值 <= 权益 × 10%（更严格）
+                        free_margin = equity - used_margin
                         
-                        logger.info(f"[balance-sync] {now.strftime('%H:%M:%S')} | 权益: ${equity:.2f} | 可开新仓: {preflight_cache.can_open_new} | 剩余本金: ${preflight_cache.remaining_base:.2f}")
+                        if equity == 0:
+                            preflight_cache.update(False, 0.0, 0.0, "余额为0", total_notional=0.0, total_margin=0.0)
+                            print(f"⚠️ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: $0 | 状态: 余额为0")
+                        else:
+                            max_allowed_margin = equity * 0.10  # 🔥 最大允许保证金
+                            remaining_margin = max_allowed_margin - used_margin
+                            
+                            if used_margin >= max_allowed_margin:
+                                preflight_cache.update(
+                                    False, 0.0, equity, 
+                                    f"已用保证金超限 ({used_margin:.2f}/{max_allowed_margin:.2f})",
+                                    total_notional=total_notional, total_margin=used_margin
+                                )
+                                # 🔥 打印风控结果（超限）
+                                print(f"🚨 [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 限额: ${max_allowed_margin:.2f} | 可用: ${free_margin:.2f} | 状态: ❌ 已超限")
+                            else:
+                                preflight_cache.update(
+                                    True, remaining_margin, equity, "OK",
+                                    total_notional=total_notional, total_margin=used_margin
+                                )
+                                # 🔥 打印风控结果（正常）
+                                print(f"✅ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 剩余额度: ${remaining_margin:.2f} | 可用: ${free_margin:.2f} | 状态: 可开仓")
+                        
+                        logger.info(f"[balance-sync] {now.strftime('%H:%M:%S')} | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 可用: ${free_margin:.2f} | 名义价值: ${total_notional:.2f}")
                         
                     except Exception as e:
                         logger.error(f"[balance-sync] 预检查异常: {e}")
@@ -762,7 +987,38 @@ def main():
     # 在进入主循环之前，并发拉取所有币种的所有周期历史数据
     # 确保后续扫描只需增量更新，不会因懒加载导致卡顿
     # ============================================================
-    if provider is not None:
+    
+    # 🔥 预热前检查：只有交易启用时才执行预热，避免拉取错误数据
+    _warmup_bot_config = get_bot_config()
+    _warmup_enable_trading = _warmup_bot_config.get('enable_trading', 0)
+    _warmup_symbols_str = _warmup_bot_config.get('symbols', '')
+    
+    # 检查是否应该执行预热
+    should_warmup = (
+        provider is not None and 
+        _warmup_enable_trading == 1 and 
+        _warmup_symbols_str.strip()  # 确保有配置的交易对
+    )
+    
+    # 🔥 预热完成标记（用于延迟预热检测）
+    warmup_completed = False
+    
+    if not should_warmup:
+        skip_reason = []
+        if provider is None:
+            skip_reason.append("MarketDataProvider 未初始化")
+        if _warmup_enable_trading != 1:
+            skip_reason.append("交易未启用")
+        if not _warmup_symbols_str.strip():
+            skip_reason.append("未配置交易对")
+        
+        print(f"\n{'='*70}")
+        print(f"⏸️ [Warmup] 跳过预热 | 原因: {', '.join(skip_reason)}")
+        print(f"   提示: 在前端启用交易后，系统会自动执行一次性预热")
+        print(f"{'='*70}\n")
+        logger.info(f"[Warmup] 跳过预热 | 原因: {', '.join(skip_reason)}")
+    
+    if should_warmup:
         warmup_start = time.time()
         warmup_symbols = list(TRADE_SYMBOLS.keys())
         warmup_timeframes = supported_timeframes  # ['1m', '3m', '5m', '15m', '30m', '1h']
@@ -791,7 +1047,7 @@ def main():
                 return symbol, tf, 0, str(e)
         
         # 使用 ThreadPoolExecutor 并发预热
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             warmup_futures = []
             for symbol in warmup_symbols:
                 for tf in warmup_timeframes:
@@ -821,12 +1077,13 @@ def main():
                 print(f"      - {sym} {tf}: {err[:30]}")
         print(f"{'='*70}\n")
         logger.info(f"[Warmup] 预热完成 | 成功: {warmup_success}/{warmup_total} | 耗时: {warmup_cost:.2f}s | 失败: {len(warmup_failed)}")
-    else:
-        print(f"\n⚠️ [Warmup] MarketDataProvider 未初始化，跳过预热")
-        logger.warning("[Warmup] MarketDataProvider 未初始化，跳过预热")
+        warmup_completed = True  # 🔥 标记预热已完成
     
     # 🔥 首次扫描标记（预热后的第一次扫描只计算信号，不执行下单）
     is_first_scan_after_warmup = True
+    
+    # 🔥 记录上一次的交易启用状态（用于检测从禁用→启用的变化）
+    _prev_enable_trading = _warmup_enable_trading
     
     while True:
         # 🔥 极速监听系统时间
@@ -856,28 +1113,95 @@ def main():
                 else:
                     current_state = "running"
             
-            # 检查交易是否被禁用或暂停
+            # 🔥 检查交易状态（但不阻止止盈检查）
+            # 即使交易禁用，也需要执行止盈检查（保护已有持仓）
+            trading_enabled = enable_trading == 1 and pause_trading != 1
+            
             if enable_trading != 1:
-                # 更新引擎状态
                 update_engine_status(alive=1, pause_trading=0)
-                # 只有状态变化时才记录日志
                 if previous_state != "idle":
-                    render_idle_block(now.strftime('%H:%M:%S'), "交易功能已禁用，等待前端启用", logger)
+                    render_idle_block(now.strftime('%H:%M:%S'), "交易功能已禁用，仅执行止盈检查", logger)
                     previous_state = "idle"
-                continue
+                _prev_enable_trading = 0
             elif pause_trading == 1:
-                # 更新引擎状态
                 update_engine_status(alive=1, pause_trading=1)
-                # 只有状态变化时才记录日志
                 if previous_state != "paused":
-                    render_idle_block(now.strftime('%H:%M:%S'), "交易已暂停，跳过扫描", logger)
+                    render_idle_block(now.strftime('%H:%M:%S'), "交易已暂停，仅执行止盈检查", logger)
                     previous_state = "paused"
-                continue
             else:
-                # 只有状态变化时才记录日志
                 if previous_state != "running":
                     logger.debug("交易已启用，开始执行扫描与信号计算")
                     previous_state = "running"
+            
+            # ============================================================
+            # 🔥 延迟预热 (Delayed Warmup)
+            # 当交易从禁用变为启用，且之前未完成预热时，执行一次性预热
+            # ============================================================
+            if enable_trading == 1 and _prev_enable_trading == 0 and not warmup_completed:
+                if provider is not None and TRADE_SYMBOLS:
+                    print(f"\n{'='*70}")
+                    print(f"🔥 [Warmup] 检测到交易启用，开始延迟预热...")
+                    print(f"   币种: {len(TRADE_SYMBOLS)} | 周期: {len(supported_timeframes)}")
+                    print(f"{'='*70}")
+                    logger.info(f"[Warmup] 延迟预热开始 | 币种: {list(TRADE_SYMBOLS.keys())} | 周期: {supported_timeframes}")
+                    
+                    warmup_start = time.time()
+                    warmup_symbols = list(TRADE_SYMBOLS.keys())
+                    warmup_timeframes = supported_timeframes
+                    warmup_total = len(warmup_symbols) * len(warmup_timeframes)
+                    warmup_success = 0
+                    warmup_failed = []
+                    
+                    def delayed_warmup_fetch_task(symbol: str, tf: str):
+                        """延迟预热任务：拉取单个币种单个周期的完整历史数据"""
+                        try:
+                            ohlcv_data, is_stale = provider.get_ohlcv(
+                                symbol, timeframe=tf, limit=1000, force_fetch=True
+                            )
+                            if ohlcv_data is not None and len(ohlcv_data) >= 50:
+                                return symbol, tf, len(ohlcv_data), None
+                            else:
+                                return symbol, tf, 0, f"数据不足: {len(ohlcv_data) if ohlcv_data is not None else 0}"
+                        except Exception as e:
+                            return symbol, tf, 0, str(e)
+                    
+                    # 使用 ThreadPoolExecutor 并发预热
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        warmup_futures = []
+                        for symbol in warmup_symbols:
+                            for tf in warmup_timeframes:
+                                warmup_futures.append(executor.submit(delayed_warmup_fetch_task, symbol, tf))
+                        
+                        for future in as_completed(warmup_futures):
+                            try:
+                                sym, tf, bar_count, error = future.result()
+                                if error:
+                                    warmup_failed.append((sym, tf, error))
+                                    print(f"   ❌ [Warmup] {sym} {tf} 失败: {error[:50]}")
+                                    logger.warning(f"[Warmup] {sym} {tf} 失败: {error}")
+                                else:
+                                    warmup_success += 1
+                                    print(f"   ✅ [Warmup] {sym} {tf} 完成 ({bar_count} bars)")
+                                    logger.debug(f"[Warmup] {sym} {tf} 完成 ({bar_count} bars)")
+                            except Exception as e:
+                                logger.error(f"[Warmup] 任务异常: {e}")
+                    
+                    warmup_cost = time.time() - warmup_start
+                    print(f"\n{'='*70}")
+                    print(f"✅ [Warmup] 延迟预热完成 | 成功: {warmup_success}/{warmup_total} | 耗时: {warmup_cost:.2f}s")
+                    if warmup_failed:
+                        print(f"   ⚠️ 失败任务: {len(warmup_failed)}")
+                        for sym, tf, err in warmup_failed[:5]:
+                            print(f"      - {sym} {tf}: {err[:30]}")
+                    print(f"   ⚠️ 本轮扫描跳过交易（预热后首次扫描）")
+                    print(f"{'='*70}\n")
+                    logger.info(f"[Warmup] 延迟预热完成 | 成功: {warmup_success}/{warmup_total} | 耗时: {warmup_cost:.2f}s")
+                    
+                    warmup_completed = True
+                    is_first_scan_after_warmup = True  # 🔥 重置首次扫描标记
+            
+            # 🔥 更新交易启用状态记录
+            _prev_enable_trading = enable_trading
             
             # 获取需要扫描的时间周期
             due_timeframes = get_due_timeframes(now.minute, supported_timeframes)
@@ -992,7 +1316,7 @@ def main():
             symbols_str = bot_config.get('symbols', '')
             if symbols_str:
                 symbols = symbols_str.split(',')
-                TRADE_SYMBOLS = {}
+                _temp_symbols = {}
                 for symbol in symbols:
                     symbol = symbol.strip()
                     if not symbol:
@@ -1001,7 +1325,9 @@ def main():
                         symbol = symbol[1:]
                     if '/' in symbol and ':' not in symbol:
                         symbol = f"{symbol}:USDT"
-                    TRADE_SYMBOLS[symbol] = {}
+                    _temp_symbols[symbol] = {}
+                # 🔥 验证并剔除不支持的币种
+                TRADE_SYMBOLS = validate_symbols_against_okx(_temp_symbols, exchange) if exchange else _temp_symbols
             
             # 静默检查配置更新（不打印日志）
             new_bot_config = get_bot_config()
@@ -1024,10 +1350,35 @@ def main():
                     base_position_size = new_bot_config.get('base_position_size', 0.01)
                     enable_trading = new_bot_config.get('enable_trading', 0)
                     
+                    # 🔥 处理数据源模式切换
+                    new_data_source_mode = new_bot_config.get('data_source_mode', 'REST')
+                    if new_data_source_mode == 'WebSocket' and ws_provider is None and WS_AVAILABLE:
+                        # 启用 WebSocket
+                        try:
+                            ws_provider = WebSocketMarketDataProvider(
+                                use_aws=False,
+                                fallback_provider=provider
+                            )
+                            if ws_provider.start():
+                                logger.info("[WS] WebSocket 数据源已启动（热加载）")
+                            else:
+                                ws_provider = None
+                        except Exception as e:
+                            logger.warning(f"[WS] WebSocket 启动失败: {e}")
+                            ws_provider = None
+                    elif new_data_source_mode == 'REST' and ws_provider is not None:
+                        # 禁用 WebSocket
+                        try:
+                            ws_provider.stop()
+                            ws_provider = None
+                            logger.info("[WS] WebSocket 数据源已停止（热加载）")
+                        except Exception:
+                            pass
+                    
                     # 解析新的交易对
                     if symbols_str:
                         symbols = symbols_str.split(',')
-                        TRADE_SYMBOLS = {}
+                        _temp_symbols = {}
                         for symbol in symbols:
                             symbol = symbol.strip()
                             if not symbol:
@@ -1036,7 +1387,9 @@ def main():
                                 symbol = symbol[1:]
                             if '/' in symbol and ':' not in symbol:
                                 symbol = f"{symbol}:USDT"
-                            TRADE_SYMBOLS[symbol] = {}
+                            _temp_symbols[symbol] = {}
+                        # 🔥 验证并剔除不支持的币种
+                        TRADE_SYMBOLS = validate_symbols_against_okx(_temp_symbols, exchange) if exchange else _temp_symbols
                     
                     last_config_updated_at = new_bot_config.get('updated_at', 0)
                     set_control_flags(reload_config=0)
@@ -1090,9 +1443,22 @@ def main():
                 
                 for attempt in range(max_retries + 1):
                     try:
+                        # 🔥 优先使用 WebSocket 数据源（如果可用）
+                        if ws_provider is not None and ws_provider.is_connected():
+                            ohlcv_data, is_from_ws = ws_provider.get_ohlcv(
+                                symbol, timeframe=tf, limit=1000, fallback_to_rest=True
+                            )
+                            if ohlcv_data and len(ohlcv_data) > 0:
+                                return symbol, tf, ohlcv_data, False, None
+                        
+                        # REST 数据源
                         if provider is not None:
+                            # 🔥 优化：移除 force_fetch=True，让缓存机制正常工作
+                            # 扫描在每分钟00秒触发，此时新K线刚收盘
+                            # 缓存机制会自动检测是否有新K线并拉取增量数据
+                            # 这样可以减少不必要的API调用，保护限流配额
                             ohlcv_data, is_stale = provider.get_ohlcv(
-                                symbol, timeframe=tf, limit=1000, force_fetch=True
+                                symbol, timeframe=tf, limit=1000
                             )
                             return symbol, tf, ohlcv_data, is_stale, None
                         else:
@@ -1119,7 +1485,7 @@ def main():
             
             # 使用 ThreadPoolExecutor 并行拉取
             import pandas as pd
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=10) as executor:
                 for symbol in current_symbols:
                     for tf in due_timeframes:
                         fetch_tasks.append(executor.submit(fetch_ohlcv_task, symbol, tf))
@@ -1159,15 +1525,14 @@ def main():
                                 ohlcv_lag_count += 1
                                 logger.debug(f"[scan-skip] reason=data_lag symbol={sym} tf={tf} current_ts={latest_candle_ts} expected={expected_tf_ts}")
                             
-                            # 🔥 关键：去除最后一根未收线K线，只保留已收线数据
-                            # 在00秒拉取时，交易所返回的最新K线(-1)是刚开盘的那根
-                            # 倒数第二根(-2)才是我们要的已收线K线
-                            # 因此去掉最后一根，策略里取 iloc[-1] 就自然是"刚收线的那根"
+                            # 🔥 修复：不去除最后一根K线，保持与旧版系统一致
+                            # 策略 check_signals() 使用 df.iloc[-1] 作为"当前K线"
+                            # 如果去除最后一根，会导致信号判断的K线关系发生偏移
+                            # 旧版系统（app的备份.txt）的 fetch_klines() 也是传入全量数据
                             df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                            if len(df) >= 2:
-                                clean_df = df.iloc[:-1].copy()  # 去除最后一根未收线K线
-                            else:
-                                clean_df = df.copy()
+                            # 🔥 添加时间戳转换（与旧版一致）
+                            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                            clean_df = df.copy()  # 不去除最后一根
                             
                             # 存入预加载数据（保持原有变量名兼容）
                             if sym not in preloaded_data:
@@ -1335,6 +1700,10 @@ def main():
                 # 策略引擎已在后台线程预加载，这里直接从缓存获取（零延迟）
                 # ============================================================
                 
+                # 🔥 如果交易未启用，跳过新信号处理（但止盈检查已在步骤1执行）
+                if not trading_enabled:
+                    continue
+                
                 # 从数据库获取UI选择的策略
                 _bot_config = get_bot_config()
                 selected_strategy_id = _bot_config.get('selected_strategy_id')
@@ -1425,6 +1794,11 @@ def main():
                     if symbol not in preloaded_data:
                         continue
                     
+                    # 检查 K线数据是否存在
+                    _df = preloaded_data[symbol].get(timeframe)
+                    if _df is None:
+                        continue
+                    
                     # 🔥 检查 K线数据是否滞后（关键校验）
                     # 注意：ohlcv_lag_dict 现在是嵌套字典 {symbol: {timeframe: bool}}
                     is_lag = ohlcv_lag_dict.get(symbol, {}).get(timeframe, False)
@@ -1443,21 +1817,6 @@ def main():
                     
                     curr_price = ticker.get("last")
                     
-                    # 在调用策略前做一次 DataFrame 列校验并打印列信息
-                    try:
-                        dfs_map = preloaded_data.get(symbol, {})
-                        for tf_name, df in dfs_map.items():
-                            cols = list(df.columns) if hasattr(df, 'columns') else []
-                            logger.debug(f"[DEBUG] {symbol} {tf_name} df.columns = {cols}")
-                            required = {'open', 'high', 'low', 'close', 'volume'}
-                            if not required.issubset(set([c.lower() for c in cols])):
-                                logger.error(f"数据列不完整或大小写不匹配: symbol={symbol} tf={tf_name} cols={cols}")
-                                raise ValueError(f"Missing required columns for {symbol} {tf_name}")
-
-                    except Exception as e:
-                        logger.error(f"{symbol} 数据校验失败: {e}")
-                        continue
-
                     # 🔥 调用策略引擎分析
                     try:
                         scan_results = strategy_engine.run_analysis_with_data(
@@ -1466,7 +1825,7 @@ def main():
                             [timeframe]
                         )
                     except Exception as e:
-                        logger.debug(f"{symbol} 策略分析失败: {e}")
+                        logger.warning(f"{symbol} 策略分析失败: {e}")
                         continue
                     
                     # ============================================================
@@ -1502,12 +1861,22 @@ def main():
                             if 'strategy_id' not in sig:
                                 sig['strategy_id'] = strategy_id
                         
-                        # 🔥 过滤止盈专用信号（TP_* 类型不开仓）
+                        # 🔥 所有非 HOLD 信号都打印日志（包括 TP 类型）
+                        if action != 'HOLD':
+                            is_tp_signal = signal_type in TP_ONLY_SIGNAL_TYPES
+                            is_1m_bottom_top = tf == '1m' and ('TOP' in signal_type.upper() or 'BOTTOM' in signal_type.upper())
+                            
+                            # 打印信号日志
+                            signal_tag = "🔔" if not is_tp_signal and not is_1m_bottom_top else "💡"
+                            execute_tag = "可执行" if not is_tp_signal and not is_1m_bottom_top else "仅止盈"
+                            print(f"   {signal_tag} [{tf}] {symbol} | {action} {signal_type} | {execute_tag}")
+                            logger.info(f"[SIGNAL] {symbol} {tf} | {action} {signal_type} | {execute_tag}")
+                        
+                        # 🔥 过滤止盈专用信号（TP_* 类型不开仓，但已打印日志）
                         if signal_type in TP_ONLY_SIGNAL_TYPES:
-                            logger.debug(f"[scan-skip] {symbol} {tf} 止盈专用信号: {signal_type}")
                             continue
                         
-                        # 🔥 1m周期的顶底信号只用于止盈，不用于开仓
+                        # 🔥 1m周期的顶底信号只用于止盈，不用于开仓（但已打印日志）
                         if tf == '1m' and ('TOP' in signal_type.upper() or 'BOTTOM' in signal_type.upper()):
                             continue
                         
@@ -1611,26 +1980,38 @@ def main():
                     position_pct = sub_position_pct if is_hedge_order else main_position_pct
                     # 使用预检查缓存的权益（零延迟）
                     _cached_equity = preflight_status['equity']
-                    position_size = _cached_equity * position_pct if _cached_equity > 0 else base_position_size
+                    # 🔥 修复：position_size 是保证金，仓位价值 = 保证金 × 杠杆
+                    margin = _cached_equity * position_pct if _cached_equity > 0 else base_position_size
+                    position_value = margin * max_lev  # 仓位价值 = 保证金 × 杠杆
                     
                     order_type_str = "对冲单" if is_hedge_order else "主仓单"
                     
                     plan_order = {
                         "symbol": symbol,
                         "side": "buy" if signal_action == "LONG" else "sell",
-                        "amount": position_size / curr_price,
+                        "amount": position_value / curr_price,  # 🔥 修复：使用仓位价值计算币数量
                         "order_type": "market",
                         "posSide": "long" if signal_action == "LONG" else "short",
                         "tdMode": OKX_TD_MODE,
                         "leverage": max_lev,
                         "candle_time": candle_time,
                         "is_hedge": is_hedge_order,
-                        "signal_type": signal_type
+                        "signal_type": signal_type,
+                        "margin": margin  # 🔥 记录保证金用于日志
                     }
                     
                     # 🔥 将信号写入数据库（持久化）
                     # 使用K线时间戳而不是当前时间戳，便于与TradingView对标
-                    signal_ts = candle_time if candle_time else int(time.time() * 1000)
+                    # 🔥 修复：candle_time 可能是 pandas Timestamp，需要转换为整数毫秒
+                    if candle_time is not None:
+                        if hasattr(candle_time, 'timestamp'):
+                            # pandas Timestamp 或 datetime 对象
+                            signal_ts = int(candle_time.timestamp() * 1000)
+                        else:
+                            # 已经是整数
+                            signal_ts = int(candle_time)
+                    else:
+                        signal_ts = int(time.time() * 1000)
                     insert_signal_event(
                         symbol=symbol,
                         timeframe=target_tf,
@@ -1654,6 +2035,11 @@ def main():
                 # 扫描摘要记录到DEBUG（统一输出在循环结束后）
                 logger.debug(f"[scan-tf] {timeframe} signals={scan_signals} orders={scan_orders}")
             
+                # 🔥 调试：打印 plan_order 状态
+                logger.info(f"[DEBUG] plan_order={plan_order is not None} | is_first_scan={is_first_scan_after_warmup} | tf={timeframe}")
+                if plan_order:
+                    print(f"   📋 plan_order: {plan_order.get('symbol')} {plan_order.get('side')} | is_first_scan={is_first_scan_after_warmup}")
+                
                 # 🔥 首次扫描跳过交易（预热后的第一次扫描只计算信号，不执行下单）
                 if is_first_scan_after_warmup and plan_order:
                     logger.info(f"[scan] 首次扫描跳过交易 | {plan_order.get('symbol')} {plan_order.get('side')} | 原因: 预热后首次扫描")
@@ -1684,8 +2070,8 @@ def main():
                             blocked_reasons.append("trading_disabled")
                         
                         can_execute_real_order = len(blocked_reasons) == 0
-                    elif run_mode == "paper":
-                        # 实盘测试不需要allow_live，但需要满足其他条件
+                    elif run_mode in ("paper", "sim", "paper_on_real"):
+                        # 实盘测试/模拟模式：不需要allow_live，使用本地模拟账户
                         if pause_trading != 0:
                             blocked_reasons.append("trading_paused")
                         if "posSide" not in plan_order:
@@ -1694,8 +2080,11 @@ def main():
                             blocked_reasons.append("trading_disabled")
                         
                         can_execute_paper_order = len(blocked_reasons) == 0
-                    else:  # sim模式
-                        blocked_reasons.append("simulation_mode")
+                        # 🔥 调试：打印 paper 模式下单条件
+                        logger.info(f"[DEBUG] paper模式: can_execute={can_execute_paper_order} | pause={pause_trading} | enable={enable_trading} | blocked={blocked_reasons}")
+                    else:
+                        # 未知模式
+                        blocked_reasons.append(f"unknown_mode_{run_mode}")
                         can_execute_real_order = False
                         can_execute_paper_order = False
                 
@@ -1791,9 +2180,12 @@ def main():
                         
                         # 🔥 收集订单信息（统一输出）
                         action = 'LONG' if plan_order['posSide'] == 'long' else 'SHORT'
+                        # 🔥 入场时间精确到毫秒
+                        entry_time_ms = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # HH:MM:SS.mmm
                         scan_collected_orders.append({
                             'symbol': symbol, 'action': action, 'price': signal_price,
-                            'type': plan_order.get('signal_type', 'UNKNOWN'), 'is_hedge': plan_order.get('is_hedge', False)
+                            'type': plan_order.get('signal_type', 'UNKNOWN'), 'is_hedge': plan_order.get('is_hedge', False),
+                            'entry_time': entry_time_ms
                         })
                         scan_orders += 1
                     except Exception as e:
@@ -1813,6 +2205,20 @@ def main():
                         
                         # 🔥 对冲单特殊处理：直接写入对冲仓位表
                         if is_hedge:
+                            # 🔥 修复：对冲仓开仓也需要扣除保证金
+                            notional = plan_order["amount"] * last_price
+                            margin = notional / max_lev
+                            fee = notional * 0.0002
+                            
+                            # 检查可用资金
+                            paper_bal = get_paper_balance()
+                            current_available = float(paper_bal.get('available', 0) or 0)
+                            required = margin + fee
+                            
+                            if current_available < required:
+                                logger.warning(f"对冲仓资金不足: ${current_available:.2f} < ${required:.2f}")
+                                continue
+                            
                             success, msg = hedge_manager.open_hedge_position(
                                 symbol=symbol,
                                 pos_side=plan_order["posSide"],
@@ -1822,6 +2228,15 @@ def main():
                             )
                             
                             if success:
+                                # 🔥 修复：更新余额（扣除保证金）
+                                current_equity = float(paper_bal.get('equity', 0) or 0)
+                                new_equity = current_equity - fee  # equity 只减少手续费
+                                new_available = current_available - required  # available 减少保证金+手续费
+                                update_paper_balance(
+                                    equity=new_equity,
+                                    available=new_available
+                                )
+                                
                                 # 添加模拟成交记录
                                 add_paper_fill(
                                     ts=int(time.time() * 1000),
@@ -1830,17 +2245,18 @@ def main():
                                     pos_side=plan_order["posSide"],
                                     qty=plan_order["amount"],
                                     price=last_price,
-                                    fee=0,
-                                    note=f"对冲开仓: {plan_order.get('signal_type', 'HEDGE')}"
+                                    fee=fee,
+                                    note=f"对冲开仓: {plan_order.get('signal_type', 'HEDGE')} | 保证金=${margin:.2f}"
                                 )
                                 
                                 signal_type = plan_order.get('signal_type', 'HEDGE')
                                 action = 'LONG' if plan_order['posSide'] == 'long' else 'SHORT'
                                 
                                 # 🔥 收集订单信息（统一输出）
+                                entry_time_ms = datetime.now().strftime('%H:%M:%S.%f')[:-3]
                                 scan_collected_orders.append({
                                     'symbol': symbol, 'action': action, 'price': last_price,
-                                    'type': signal_type, 'is_hedge': True
+                                    'type': signal_type, 'is_hedge': True, 'entry_time': entry_time_ms
                                 })
                                 scan_orders += 1
                             else:
@@ -1883,9 +2299,10 @@ def main():
                             # 🔥 收集订单信息（统一输出）
                             signal_type = plan_order.get('signal_type', 'UNKNOWN')
                             action = 'LONG' if plan_order['posSide'] == 'long' else 'SHORT'
+                            entry_time_ms = datetime.now().strftime('%H:%M:%S.%f')[:-3]
                             scan_collected_orders.append({
                                 'symbol': symbol, 'action': action, 'price': last_price,
-                                'type': signal_type, 'is_hedge': False
+                                'type': signal_type, 'is_hedge': False, 'entry_time': entry_time_ms
                             })
                         
                         scan_orders += 1
@@ -1904,7 +2321,9 @@ def main():
                         'latency_ms': int((time.time() - cycle_start_time) * 1000),
                         'mode': run_mode
                     }
-                    logger.debug(f"订单被拦截: 原因={','.join(blocked_reasons)} | 周期: {timeframe}", extra=extra)
+                    # 🔥 提高日志级别，方便调试
+                    logger.warning(f"⚠️ 订单被拦截: {plan_order.get('symbol')} {plan_order.get('side')} | 原因: {','.join(blocked_reasons) if blocked_reasons else '未知'} | run_mode={run_mode}")
+                    print(f"   ⚠️ 订单被拦截: {plan_order.get('symbol')} | 原因: {','.join(blocked_reasons) if blocked_reasons else '未知'}")
                     
                     # 记录模拟订单（仅日志）
                     logger.debug(f"模拟订单: {json.dumps(plan_order)} (run_mode: {run_mode}, pause_trading: {pause_trading}, allow_live: {control.get('allow_live')}) | 周期: {timeframe}")
@@ -1955,6 +2374,8 @@ def main():
                     risk_status=scan_risk_status,
                     equity=preflight_status['equity'],
                     remaining_base=preflight_status['remaining_base'],
+                    total_base_used=preflight_status.get('total_base_used', 0.0),
+                    total_margin=preflight_status.get('total_margin', 0.0),  # 🔥 传递已用保证金
                     signals=scan_collected_signals,
                     orders=scan_collected_orders,
                     elapsed_sec=cycle_elapsed,
@@ -1990,6 +2411,14 @@ def main():
         else:
             # 未触发扫描时，低延迟空转
             time.sleep(0.01)  # 10ms空转，提高扫描精度
+    
+    # 🔥 清理 WebSocket 连接
+    if ws_provider is not None:
+        try:
+            ws_provider.stop()
+            logger.debug("[WS] WebSocket 数据源已停止")
+        except Exception:
+            pass
     
     print(f"\n{'='*70}")
     print("🛑 交易引擎已停止")

@@ -34,12 +34,27 @@ except ImportError:
     HAS_AUTOREFRESH = False
 
 # Run mode mappings (DB <-> UI)
+# 🔥 统一使用 run_mode.py 中的定义
 # 只保留两种模式: 实盘测试(读取实盘数据但不下单)和实盘(真实交易)
-RUN_MODE_UI = ["🛰️ 实盘测试", "💰 实盘"]
-RUN_MODE_UI_TO_DB = {"🛰️ 实盘测试": "paper", "💰 实盘": "live"}  # paper模式用于实盘测试
-RUN_MODE_DB_TO_UI = {v: k for k, v in RUN_MODE_UI_TO_DB.items()}
-# 兼容旧的sim模式, 映射到实盘测试
-RUN_MODE_DB_TO_UI['sim'] = "🛰️ 实盘测试"
+try:
+    from run_mode import (
+        RunMode, run_mode_to_display, run_mode_to_db, db_to_run_mode,
+        RUN_MODE_DISPLAY, RUN_MODE_TO_DB, DB_TO_RUN_MODE
+    )
+    RUN_MODE_UI = [RUN_MODE_DISPLAY[RunMode.PAPER], RUN_MODE_DISPLAY[RunMode.LIVE]]
+    RUN_MODE_UI_TO_DB = {v: k for k, v in RUN_MODE_DISPLAY.items()}
+    RUN_MODE_UI_TO_DB = {RUN_MODE_DISPLAY[RunMode.PAPER]: "paper", RUN_MODE_DISPLAY[RunMode.LIVE]: "live"}
+    RUN_MODE_DB_TO_UI = {v: k for k, v in RUN_MODE_UI_TO_DB.items()}
+    # 兼容旧的sim和paper_on_real模式
+    RUN_MODE_DB_TO_UI['sim'] = RUN_MODE_DISPLAY[RunMode.PAPER]
+    RUN_MODE_DB_TO_UI['paper_on_real'] = RUN_MODE_DISPLAY[RunMode.PAPER]
+except ImportError:
+    # 回退到硬编码值
+    RUN_MODE_UI = ["🛰️ 实盘测试", "💰 实盘"]
+    RUN_MODE_UI_TO_DB = {"🛰️ 实盘测试": "paper", "💰 实盘": "live"}
+    RUN_MODE_DB_TO_UI = {v: k for k, v in RUN_MODE_UI_TO_DB.items()}
+    RUN_MODE_DB_TO_UI['sim'] = "🛰️ 实盘测试"
+    RUN_MODE_DB_TO_UI['paper_on_real'] = "🛰️ 实盘测试"
 
 
 # ============ Market API 客户端 ============
@@ -101,6 +116,58 @@ def check_market_api_status() -> bool:
 # 🔥 UI K线图使用独立缓存，只显示收盘K线，不影响交易引擎
 _UI_KLINE_CACHE = {}  # {(symbol, tf): {'data': [...], 'ts': timestamp}}
 _UI_KLINE_CACHE_TTL = 10  # 10秒缓存
+
+# 🔥 WebSocket 客户端单例（UI 专用）
+_UI_WS_CLIENT = None
+
+
+def _get_ui_ws_client():
+    """获取 UI 专用的 WebSocket 客户端"""
+    global _UI_WS_CLIENT
+    
+    if _UI_WS_CLIENT is not None:
+        return _UI_WS_CLIENT
+    
+    try:
+        from okx_websocket import OKXWebSocketClient, is_ws_available
+        if is_ws_available():
+            _UI_WS_CLIENT = OKXWebSocketClient(use_aws=False)
+            return _UI_WS_CLIENT
+    except ImportError:
+        pass
+    
+    return None
+
+
+def _fetch_ohlcv_via_websocket(symbol: str, timeframe: str, limit: int = 500) -> list:
+    """
+    🔥 通过 WebSocket 获取 K线数据（UI 专用）
+    
+    特点：
+    1. 实时推送，低延迟
+    2. 自动订阅并缓存
+    3. 数据不足时回退到 REST
+    """
+    ws_client = _get_ui_ws_client()
+    if ws_client is None:
+        return []
+    
+    # 确保连接
+    if not ws_client.is_connected():
+        if not ws_client.start():
+            return []
+    
+    # 订阅（如果尚未订阅）
+    ws_client.subscribe_candles(symbol, timeframe)
+    
+    # 获取缓存数据
+    data = ws_client.get_candles(symbol, timeframe, limit)
+    
+    # 去掉最后一根正在形成的K线
+    if data and len(data) > 1:
+        return data[:-1]
+    
+    return data
 
 
 def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> list:
@@ -281,31 +348,305 @@ def render_login(view_model, actions):
             st.warning("⚠️ 会话已超时, 请重新登录")
     
     if not st.session_state.get("logged_in", False):
-        # 🔥 何以为势 入场动画
-        st.markdown("""<style>.auth-box {max-width:400px;margin:auto;padding:20px}
-        @keyframes fadeOut { 0% { opacity: 1; z-index: 999999; } 80% { opacity: 1; } 100% { opacity: 0; z-index: -1; visibility: hidden; }}
-        @keyframes textShine { 0% { background-position: 0% 50%; } 100% { background-position: 100% 50%; }}
-        #intro-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; display: flex; justify-content: center; align-items: center; animation: fadeOut 2.5s forwards; z-index: 999999; }
-        .intro-text { font-size: 60px; font-weight: 900; background: linear-gradient(to right, #4d4d4d 0%, #fff 50%, #4d4d4d 100%); background-size: 200% auto; color: transparent; -webkit-background-clip: text; background-clip: text; animation: textShine 2s linear infinite; letter-spacing: 8px; }
-        .intro-sub { margin-top: 20px; font-size: 16px; color: #999 !important; text-align: center; font-family: 'Courier New'; letter-spacing: 2px; }
+        # 🔥 炫酷登录页面样式
+        st.markdown("""
+        <style>
+        /* 隐藏 Streamlit 默认元素 */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        
+        /* 登录页面背景 */
+        .login-container {
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        /* 标题动画 */
+        @keyframes textGlow {
+            0%, 100% { text-shadow: 0 0 20px rgba(255, 107, 107, 0.5), 0 0 40px rgba(255, 107, 107, 0.3); }
+            50% { text-shadow: 0 0 30px rgba(72, 219, 251, 0.8), 0 0 60px rgba(72, 219, 251, 0.5); }
+        }
+        @keyframes textShine { 
+            0% { background-position: 0% 50%; } 
+            100% { background-position: 200% 50%; } 
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .login-title {
+            font-size: 56px;
+            font-weight: 900;
+            background: linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3, #ff6b6b);
+            background-size: 200% auto;
+            color: transparent;
+            -webkit-background-clip: text;
+            background-clip: text;
+            animation: textShine 3s linear infinite, textGlow 2s ease-in-out infinite;
+            letter-spacing: 8px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .login-subtitle {
+            font-size: 14px;
+            color: #666;
+            letter-spacing: 6px;
+            font-family: 'Courier New', monospace;
+            margin-bottom: 40px;
+            text-align: center;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        .login-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            animation: float 3s ease-in-out infinite;
+        }
+        
+        .login-divider {
+            width: 120px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #ff6b6b, #48dbfb, transparent);
+            margin: 15px auto;
+        }
+        
+        /* 输入框样式 */
+        .stTextInput > div > div > input {
+            background: rgba(255, 255, 255, 0.05) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            border-radius: 10px !important;
+            color: #fff !important;
+            padding: 15px !important;
+            font-size: 16px !important;
+        }
+        .stTextInput > div > div > input:focus {
+            border-color: #ff6b6b !important;
+            box-shadow: 0 0 20px rgba(255, 107, 107, 0.3) !important;
+        }
+        
+        /* 按钮样式 */
+        .stButton > button {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ff8e8e 100%) !important;
+            border: none !important;
+            border-radius: 10px !important;
+            color: white !important;
+            font-weight: 600 !important;
+            padding: 12px 30px !important;
+            transition: all 0.3s ease !important;
+        }
+        .stButton > button:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 10px 30px rgba(255, 107, 107, 0.4) !important;
+        }
+        
+        /* 信息框样式 */
+        .stAlert {
+            background: rgba(255, 255, 255, 0.05) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            border-radius: 10px !important;
+        }
+        
+        /* 🌸 动漫风渐变背景 */
+        .stApp {
+            background: linear-gradient(135deg, 
+                #0f0c29 0%, 
+                #302b63 25%, 
+                #24243e 50%,
+                #1a1a2e 75%,
+                #0f0c29 100%) !important;
+            background-size: 400% 400% !important;
+            animation: gradientShift 15s ease infinite !important;
+        }
+        
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        /* ✨ 星空粒子效果 */
+        .stars-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+            overflow: hidden;
+        }
+        
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle 3s ease-in-out infinite;
+        }
+        
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+        
+        /* 流星效果 */
+        .meteor {
+            position: absolute;
+            width: 2px;
+            height: 80px;
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.8), rgba(255,255,255,0));
+            animation: meteor 3s linear infinite;
+            opacity: 0;
+        }
+        
+        @keyframes meteor {
+            0% { transform: translateX(0) translateY(0) rotate(45deg); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateX(500px) translateY(500px) rotate(45deg); opacity: 0; }
+        }
+        
+        /* 🌙 装饰性光晕 */
+        .glow-orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(60px);
+            opacity: 0.15;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        .glow-orb.pink {
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, #ff6b9d 0%, transparent 70%);
+            top: 10%;
+            right: 10%;
+            animation: orbFloat 8s ease-in-out infinite;
+        }
+        
+        .glow-orb.blue {
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, #48dbfb 0%, transparent 70%);
+            bottom: 10%;
+            left: 5%;
+            animation: orbFloat 10s ease-in-out infinite reverse;
+        }
+        
+        .glow-orb.purple {
+            width: 250px;
+            height: 250px;
+            background: radial-gradient(circle, #a855f7 0%, transparent 70%);
+            top: 50%;
+            left: 50%;
+            animation: orbFloat 12s ease-in-out infinite;
+        }
+        
+        @keyframes orbFloat {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(30px, -20px) scale(1.1); }
+            50% { transform: translate(-20px, 30px) scale(0.9); }
+            75% { transform: translate(-30px, -10px) scale(1.05); }
+        }
+        
+        /* 🎴 日式装饰线条 */
+        .deco-line {
+            position: fixed;
+            background: linear-gradient(90deg, transparent, rgba(255,107,157,0.3), transparent);
+            height: 1px;
+            width: 200px;
+            z-index: 1;
+        }
+        
+        .deco-line.top-left {
+            top: 50px;
+            left: 30px;
+            transform: rotate(-30deg);
+        }
+        
+        .deco-line.top-right {
+            top: 80px;
+            right: 50px;
+            transform: rotate(30deg);
+        }
+        
+        .deco-line.bottom-left {
+            bottom: 100px;
+            left: 50px;
+            transform: rotate(20deg);
+        }
+        
+        .deco-line.bottom-right {
+            bottom: 60px;
+            right: 30px;
+            transform: rotate(-20deg);
+        }
         </style>
-        <div id="intro-overlay"><div style="text-align: center;"><div class="intro-text">何以为势</div><div class="intro-sub">SYSTEM ONLINE...</div></div></div>
         """, unsafe_allow_html=True)
         
-        st.title("🔐 何以为势の实盘系统")
+        # 登录页面内容
+        st.markdown('<div class="login-icon">⚡</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-title">何以为势</div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-subtitle">QUANTITATIVE TRADING SYSTEM</div>', unsafe_allow_html=True)
         
-        # 显示开发模式警告
+        # 🌸 动漫风背景装饰元素
+        st.markdown('''
+        <!-- 光晕效果 -->
+        <div class="glow-orb pink"></div>
+        <div class="glow-orb blue"></div>
+        <div class="glow-orb purple"></div>
+        
+        <!-- 装饰线条 -->
+        <div class="deco-line top-left"></div>
+        <div class="deco-line top-right"></div>
+        <div class="deco-line bottom-left"></div>
+        <div class="deco-line bottom-right"></div>
+        
+        <!-- 星空粒子 -->
+        <div class="stars-container">
+            <div class="star" style="width:2px;height:2px;top:10%;left:20%;animation-delay:0s;"></div>
+            <div class="star" style="width:3px;height:3px;top:20%;left:80%;animation-delay:0.5s;"></div>
+            <div class="star" style="width:2px;height:2px;top:30%;left:40%;animation-delay:1s;"></div>
+            <div class="star" style="width:1px;height:1px;top:15%;left:60%;animation-delay:1.5s;"></div>
+            <div class="star" style="width:2px;height:2px;top:50%;left:10%;animation-delay:2s;"></div>
+            <div class="star" style="width:3px;height:3px;top:60%;left:90%;animation-delay:0.3s;"></div>
+            <div class="star" style="width:2px;height:2px;top:70%;left:30%;animation-delay:0.8s;"></div>
+            <div class="star" style="width:1px;height:1px;top:80%;left:70%;animation-delay:1.2s;"></div>
+            <div class="star" style="width:2px;height:2px;top:40%;left:50%;animation-delay:1.8s;"></div>
+            <div class="star" style="width:3px;height:3px;top:90%;left:15%;animation-delay:2.2s;"></div>
+            <div class="star" style="width:2px;height:2px;top:25%;left:95%;animation-delay:0.7s;"></div>
+            <div class="star" style="width:1px;height:1px;top:85%;left:45%;animation-delay:1.3s;"></div>
+            <!-- 流星 -->
+            <div class="meteor" style="top:5%;left:70%;animation-delay:0s;"></div>
+            <div class="meteor" style="top:15%;left:30%;animation-delay:4s;"></div>
+            <div class="meteor" style="top:8%;left:85%;animation-delay:8s;"></div>
+        </div>
+        ''', unsafe_allow_html=True)
+        
+        # 显示开发模式警告（简化版）
         if USING_DEV_PASSWORD:
-            st.warning("⚠️ 当前使用开发模式默认密码, 请勿在生产环境使用!请设置 STREAMLIT_ACCESS_PASSWORD 环境变量. ")
+            st.warning("⚠️ 开发模式 - 请设置 STREAMLIT_ACCESS_PASSWORD 环境变量")
         
-        c1, c2, c3 = st.columns([1,2,1])
+        c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
-            st.markdown("### 请输入访问密码")
-            password_input = st.text_input("🔑 访问密码", type="password", placeholder="请输入访问密码")
+            password_input = st.text_input("🔑 访问密码", type="password", placeholder="请输入访问密码", label_visibility="collapsed")
             
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                if st.button("✅ 进入系统", width="stretch"):
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("⚡ 进入系统", use_container_width=True):
                     # 忽略用户输入两端的意外空白字符后比较
                     if (password_input or '').strip() == ACCESS_PASSWORD:
                         st.session_state.logged_in = True
@@ -335,17 +676,21 @@ def render_login(view_model, actions):
                             "secondary": bot_config.get("position_size", 0.05) / 2
                         }
                         
+                        # 🔥 设置入场动画标志，登录后显示
+                        st.session_state.show_intro_animation = True
+                        
                         st.success("✅ 登录成功!")
-                        time.sleep(0.5)
+                        time.sleep(0.3)
                         st.rerun()
                     else:
                         st.error("❌ 密码错误, 请重试")
             
-            with col_btn2:
-                st.caption("📞 忘记密码请联系管理员")
-            
-            st.divider()
-            st.info("🛡️ 安全提示: 请保管好您的访问密码, 不要分享给他人")
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+            <div style="text-align: center; color: #555; font-size: 12px;">
+                🛡️ 请保管好您的访问密码
+            </div>
+            """, unsafe_allow_html=True)
         
         st.stop()  # 阻止未登录用户访问后续内容
 
@@ -560,119 +905,192 @@ def render_sidebar(view_model, actions):
         if selected_strategy_tuple[1] != st.session_state.get('selected_strategy_id'):
             st.session_state.selected_strategy_id = selected_strategy_tuple[1]
         
-        # API配置界面
-        st.markdown("### 🔑 API配置")
-        with st.expander("API密钥配置", expanded=False):
-            # 使用后端提供bootstrap / credential status
-            cred_status = actions.get("get_credentials_status", lambda: {"okx_bound": False, "okx_key_tail": None})()
-
-            # 展示绑定状态(脱敏)
-            if cred_status.get('okx_bound'):
-                st.success(f"[OK] API 状态: 已绑定(****{cred_status.get('okx_key_tail')})")
-                st.caption("如需更换密钥, 请重新输入所有字段")
+        # ============ 🔥 双 Key API 配置面板 ============
+        st.markdown("### 🔑 API 密钥管理")
+        
+        # 导入配置管理器
+        try:
+            from config_manager import get_config_manager, save_api_credentials, get_api_status, mask_key
+            config_mgr = get_config_manager()
+            api_status = get_api_status()
+            HAS_CONFIG_MANAGER = True
+        except ImportError:
+            HAS_CONFIG_MANAGER = False
+            api_status = {}
+        
+        with st.expander("API 密钥配置（双 Key 机制）", expanded=False):
+            if not HAS_CONFIG_MANAGER:
+                st.error("❌ config_manager 模块未找到")
             else:
-                st.warning("[!] API 状态: 未绑定, 请配置API密钥")
-
-            # ============ 修复 session_state 问题 ============
-            # 使用 "输入key / 保存key" 分离模式
-            # - widget key: ui_api_key_input / ui_api_secret_input / ui_api_passphrase_input
-            # - 内部状态: api_key_saved / api_secret_saved / api_passphrase_saved (不直接使用)
-            # 
-            # 关键: 不要在 widget 创建后修改 widget key 对应的 session_state
-            
-            # 密钥输入 - 不使用 value 参数, 让 Streamlit 自动管理
-            # 每次页面刷新后输入框自动清空(这是期望的安全行为)
-            api_key = st.text_input(
-                "API Key", 
-                key='ui_api_key_input',  # 使用 _input 后缀区分
-                type='password', 
-                placeholder="输入新的API Key(留空则不更新)"
-            )
-            api_secret = st.text_input(
-                "API Secret", 
-                key='ui_api_secret_input',  # 使用 _input 后缀区分
-                type='password',
-                placeholder="输入新的API Secret(留空则不更新)"
-            )
-            api_password = st.text_input(
-                "API Password", 
-                key='ui_api_passphrase_input',  # 使用 _input 后缀区分
-                type='password',
-                placeholder="输入新的API Password(留空则不更新)"
-            )
-
-            # 定义保存回调函数
-            def _save_api_config():
-                """
-                保存API配置的回调函- P2-10修复: 并发安全
+                # 显示当前状态
+                st.markdown("##### 📊 当前配置状态")
+                col_trade, col_market = st.columns(2)
                 
-                设计原则: DB SSOT, 先DB 再更session_state
-                """
-                # widget key 读取值(不修widget key                key_val = st.session_state.get('ui_api_key_input', '')
-                secret_val = st.session_state.get('ui_api_secret_input', '')
-                pass_val = st.session_state.get('ui_api_passphrase_input', '')
+                with col_trade:
+                    if api_status.get('has_trade_key'):
+                        st.success(f"✅ 交易 Key: ****{api_status.get('trade_key_tail', '')}")
+                    else:
+                        st.warning("⚠️ 交易 Key: 未配置")
                 
-                kwargs = {}
-                if key_val:
-                    kwargs['okx_api_key'] = key_val
-                if secret_val:
-                    kwargs['okx_api_secret'] = secret_val
-                if pass_val:
-                    kwargs['okx_api_passphrase'] = pass_val
+                with col_market:
+                    if api_status.get('has_market_key'):
+                        st.success(f"✅ 行情 Key: ****{api_status.get('market_key_tail', '')}")
+                    else:
+                        st.info("ℹ️ 行情 Key: 未配置（使用交易 Key）")
                 
-                if kwargs:
-                    # P2-10: 先写DB(SSOT)
+                if api_status.get('updated_at') and api_status.get('updated_at') != 'from_env':
+                    st.caption(f"📅 上次更新: {api_status.get('updated_at', '')[:19]}")
+                elif api_status.get('source') == 'env':
+                    st.caption("📁 配置来源: 环境变量")
+                
+                st.divider()
+                
+                # ============ 交易专用 Key ============
+                st.markdown("##### 🔐 交易专用 Key（用于下单）")
+                st.caption("需要交易权限，用于策略下单、撤单、查询持仓")
+                
+                trade_key = st.text_input(
+                    "Trade API Key",
+                    key='ui_trade_key_input',
+                    type='password',
+                    placeholder="输入交易 API Key（留空则不更新）"
+                )
+                trade_secret = st.text_input(
+                    "Trade API Secret",
+                    key='ui_trade_secret_input',
+                    type='password',
+                    placeholder="输入交易 API Secret（留空则不更新）"
+                )
+                trade_passphrase = st.text_input(
+                    "Trade API Passphrase",
+                    key='ui_trade_passphrase_input',
+                    type='password',
+                    placeholder="输入交易 API Passphrase（留空则不更新）"
+                )
+                
+                st.divider()
+                
+                # ============ 行情专用 Key ============
+                st.markdown("##### 📈 行情专用 Key（可选，推荐）")
+                st.caption("建议只读权限，用于 K线图、实时行情，与交易接口隔离避免 Rate Limit 冲突")
+                
+                market_key = st.text_input(
+                    "Market API Key",
+                    key='ui_market_key_input',
+                    type='password',
+                    placeholder="输入行情 API Key（可选，留空则使用交易 Key）"
+                )
+                market_secret = st.text_input(
+                    "Market API Secret",
+                    key='ui_market_secret_input',
+                    type='password',
+                    placeholder="输入行情 API Secret（可选）"
+                )
+                market_passphrase = st.text_input(
+                    "Market API Passphrase",
+                    key='ui_market_passphrase_input',
+                    type='password',
+                    placeholder="输入行情 API Passphrase（可选）"
+                )
+                
+                st.divider()
+                
+                # ============ 保存按钮 ============
+                def _save_dual_key_config():
+                    """保存双 Key 配置"""
+                    # 读取输入值
+                    t_key = st.session_state.get('ui_trade_key_input', '')
+                    t_secret = st.session_state.get('ui_trade_secret_input', '')
+                    t_pass = st.session_state.get('ui_trade_passphrase_input', '')
+                    m_key = st.session_state.get('ui_market_key_input', '')
+                    m_secret = st.session_state.get('ui_market_secret_input', '')
+                    m_pass = st.session_state.get('ui_market_passphrase_input', '')
+                    
+                    # 检查是否有输入
+                    has_trade_input = bool(t_key or t_secret or t_pass)
+                    has_market_input = bool(m_key or m_secret or m_pass)
+                    
+                    if not has_trade_input and not has_market_input:
+                        st.session_state._dual_key_save_empty = True
+                        return
+                    
+                    # 保存到配置管理器
                     try:
-                        actions.get("update_bot_config", lambda **kw: None)(**kwargs)
-                        actions.get("set_control_flags", lambda **kw: None)(reload_config=1)
-                        # 标记保存成功, 用于后续验证
-                        st.session_state._api_save_pending = True
-                        st.session_state._api_save_kwargs = kwargs
+                        success = save_api_credentials(
+                            trade_key=t_key if t_key else None,
+                            trade_secret=t_secret if t_secret else None,
+                            trade_passphrase=t_pass if t_pass else None,
+                            market_key=m_key if m_key else None,
+                            market_secret=m_secret if m_secret else None,
+                            market_passphrase=m_pass if m_pass else None
+                        )
+                        
+                        if success:
+                            st.session_state._dual_key_save_success = True
+                            # 同时更新数据库配置（兼容旧逻辑）
+                            if t_key:
+                                actions.get("update_bot_config", lambda **kw: None)(okx_api_key=t_key)
+                            if t_secret:
+                                actions.get("update_bot_config", lambda **kw: None)(okx_api_secret=t_secret)
+                            if t_pass:
+                                actions.get("update_bot_config", lambda **kw: None)(okx_api_passphrase=t_pass)
+                            actions.get("set_control_flags", lambda **kw: None)(reload_config=1)
+                        else:
+                            st.session_state._dual_key_save_error = "保存失败"
                     except Exception as e:
-                        st.session_state._api_save_error = str(e)[:60]
-                else:
-                    st.session_state._api_save_empty = True
-
-            # 保存API配置按钮 - 使用 on_click 回调
-            st.button("💾 保存API配置", width="stretch", on_click=_save_api_config)
-            
-            # 处理保存结果(在回调之后执行)
-            if st.session_state.get('_api_save_pending'):
-                # 清除标记
-                st.session_state._api_save_pending = False
-                kwargs = st.session_state.pop('_api_save_kwargs', {})
+                        st.session_state._dual_key_save_error = str(e)[:60]
                 
-                # 校验凭证有效性
-                st.info("正在验证 API 凭证...")
-                verify_result = actions.get('verify_credentials_and_snapshot', lambda **kw: {'ok': False})()
+                col_save, col_clear = st.columns([3, 1])
+                with col_save:
+                    st.button("💾 保存 API 配置", key="save_dual_key_btn", 
+                              on_click=_save_dual_key_config, use_container_width=True)
+                with col_clear:
+                    if st.button("🗑️", key="clear_key_btn", help="清除已保存的配置"):
+                        config_mgr.clear_credentials()
+                        st.success("已清除保存的配置")
+                        time.sleep(0.5)
+                        st.rerun()
                 
-                if verify_result.get('ok'):
-                    st.success("[OK] API配置已保存!凭证验证成功, 账户信息已更新")
-                    # 清除实时数据缓存, 确保下次刷新获取最新数据
-                    clear_realtime_cache()
-                    # 更新 session_state 中的余额信息
-                    summary = verify_result.get('account_summary', {})
-                    # balance ccxt 返回的格式, 需要从中提取 USDT 余额
-                    balance = summary.get('balance', {})
-                    # ccxt 返回格式: {'total': {'USDT': xxx}, 'free': {'USDT': xxx}, ...}
-                    total_usdt = balance.get('total', {}).get('USDT', 0) if isinstance(balance, dict) else 0
-                    free_usdt = balance.get('free', {}).get('USDT', 0) if isinstance(balance, dict) else 0
-                    st.session_state.live_balance = {
-                        'equity': total_usdt,
-                        'available': free_usdt
-                    }
-                    time.sleep(0.5)
+                # 处理保存结果
+                if st.session_state.pop('_dual_key_save_success', False):
+                    st.success("✅ API 配置已保存！环境变量已热更新，无需重启服务")
+                    # 验证交易 Key
+                    verify_result = actions.get('verify_credentials_and_snapshot', lambda **kw: {'ok': False})()
+                    if verify_result.get('ok'):
+                        st.success("✅ 交易 Key 验证成功！")
+                        summary = verify_result.get('account_summary', {})
+                        balance = summary.get('balance', {})
+                        total_usdt = balance.get('total', {}).get('USDT', 0) if isinstance(balance, dict) else 0
+                        st.session_state.live_balance = {'equity': total_usdt, 'available': total_usdt}
+                    else:
+                        st.warning(f"⚠️ 交易 Key 验证失败: {verify_result.get('error', '未知错误')[:50]}")
+                    time.sleep(1)
                     st.rerun()
-                else:
-                    error_msg = verify_result.get('error', '未知错误')
-                    st.error(f"[X] 凭证验证失败: {error_msg[:100]}")
-                    st.info("请检API Key、Secret Passphrase 是否正确")
-            
-            if st.session_state.pop('_api_save_empty', False):
-                st.warning('无变更要保存')
-            
-            if '_api_save_error' in st.session_state:
-                st.error(f"保存API配置失败: {st.session_state.pop('_api_save_error')}")
+                
+                if st.session_state.pop('_dual_key_save_empty', False):
+                    st.warning("⚠️ 请至少输入一个字段")
+                
+                if '_dual_key_save_error' in st.session_state:
+                    st.error(f"❌ 保存失败: {st.session_state.pop('_dual_key_save_error')}")
+                
+                # 帮助信息
+                with st.expander("💡 双 Key 机制说明", expanded=False):
+                    st.markdown("""
+                    **为什么需要双 Key？**
+                    
+                    OKX API 有请求频率限制（Rate Limit）。如果 K线图高频刷新和交易下单共用同一个 Key，
+                    可能导致交易请求被限流，错过最佳入场时机。
+                    
+                    **推荐配置：**
+                    1. **交易 Key**：需要交易权限，用于下单
+                    2. **行情 Key**：只读权限即可，用于 K线图
+                    
+                    **如何创建只读 Key？**
+                    1. 登录 OKX 官网 → API 管理
+                    2. 创建新 API Key
+                    3. 权限只勾选"读取"，不勾选"交易"
+                    4. 将新 Key 填入"行情专用 Key"
+                    """)
         
         # 交易池配置
         st.markdown("### 🤖 交易池")
@@ -693,24 +1111,7 @@ def render_sidebar(view_model, actions):
             height=100
         )
         
-        # 【A】修复: 预览自动格式化后的交易池(与实际保存内容一致)
-        # P2修复: 添加白名单检查
-        from symbol_utils import is_symbol_whitelisted, SYMBOL_WHITELIST
-        if symbol_input:
-            preview_symbols = parse_symbol_input(symbol_input)
-            if preview_symbols:
-                st.info(f"格式化后将保存为: {', '.join(preview_symbols)}")
-                # P2修复: 检查是否有非白名单币种
-                non_whitelist = []
-                for sym in preview_symbols:
-                    base = sym.split('/')[0] if '/' in sym else sym
-                    if not is_symbol_whitelisted(base):
-                        non_whitelist.append(base)
-                if non_whitelist:
-                    st.warning(f"⚠️ 以下币种不在白名单中(可能流动性较低): {', '.join(non_whitelist)}")
-                    st.caption(f"白名单币 {', '.join(sorted(SYMBOL_WHITELIST)[:15])}...")
-            else:
-                st.warning("⚠️ 未识别到有效的交易对")
+        # 预览格式化后的交易池（不再显示白名单警告，白名单已改为动态获取）
         
         if st.button("💾 保存交易池", width="stretch"):
             # 【A】修复: 使用 parse_symbol_input 进行规范化
@@ -826,7 +1227,75 @@ def render_sidebar(view_model, actions):
             exec_mode_short = {"intrabar": "抢跑", "confirmed": "收线", "both": "双通道"}.get(new_exec_mode, new_exec_mode)
             st.caption(f"当前: {exec_mode_short} | {new_leverage}x杠杆 | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}%")
         
+        # ============ 🔥 数据源模式选择器 ============
+        st.markdown("### 📡 数据源模式")
+        
+        # 初始化数据源模式
+        if "data_source_mode" not in st.session_state:
+            st.session_state.data_source_mode = "REST"  # 默认 REST 轮询
+        
+        # 数据源模式选项
+        DATA_SOURCE_MODES = {
+            "REST": "🔄 REST 轮询 (推荐)",
+            "WebSocket": "⚡ WebSocket 极速"
+        }
+        
+        def _on_data_source_change():
+            """数据源模式切换回调"""
+            sel = st.session_state.get('data_source_selector')
+            if sel:
+                st.session_state.data_source_mode = sel
+                # 写入数据库配置
+                try:
+                    actions.get("update_bot_config", lambda **kw: None)(data_source_mode=sel)
+                    actions.get("set_control_flags", lambda **kw: None)(reload_config=1)
+                except Exception:
+                    pass
+        
+        current_mode = st.session_state.data_source_mode
+        mode_options = list(DATA_SOURCE_MODES.keys())
+        current_idx = mode_options.index(current_mode) if current_mode in mode_options else 0
+        
+        st.selectbox(
+            "策略引擎数据源",
+            mode_options,
+            index=current_idx,
+            key='data_source_selector',
+            format_func=lambda x: DATA_SOURCE_MODES.get(x, x),
+            on_change=_on_data_source_change
+        )
+        
+        # 模式说明
+        if st.session_state.data_source_mode == "REST":
+            st.caption("📌 稳定优先，抗网络波动，适合大多数场景")
+        else:
+            st.markdown(":red[⚠️ WebSocket 模式对网络稳定性要求极高！]")
+            st.caption("低延迟但易断连，建议仅在网络稳定时使用")
+            # 🔥 显示 WebSocket 连接状态
+            try:
+                from okx_websocket import get_ws_client, is_ws_available, start_ws_client
+                if is_ws_available():
+                    ws_client = get_ws_client()
+                    if ws_client and ws_client.is_connected():
+                        st.success("🟢 WebSocket 已连接")
+                        stats = ws_client.get_cache_stats()
+                        st.caption(f"订阅数: {stats.get('subscriptions', 0)} | K线缓存: {len(stats.get('candle_cache', {}))}")
+                    else:
+                        st.warning("🟡 WebSocket 未连接")
+                        if st.button("🔌 连接 WebSocket", key="ws_connect_btn"):
+                            if start_ws_client():
+                                st.success("连接成功！")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("连接失败，请检查网络")
+                else:
+                    st.info("💡 请安装 websocket-client: pip install websocket-client")
+            except ImportError:
+                st.info("💡 WebSocket 模块加载失败")
+        
         # 资产概览已移至侧边栏顶部, 此处不再重复显示
+        # API 隔离状态已整合到"API 密钥管理"面板中
 
 @st.fragment
 def _render_kline_section_fragment(view_model, actions):
@@ -873,29 +1342,21 @@ def _render_kline_chart(view_model, actions):
     
     timeframes = ['1m', '3m', '5m', '15m', '30m', '1h']
     
-    # 🔥 控制栏
-    col_sym, col_tf, col_refresh, col_interval, col_btn, col_status = st.columns([2, 1, 1, 1, 1, 1])
+    # 🔥 控制栏（固定自动刷新，无手动刷新按钮）
+    col_sym, col_tf, col_interval, col_status = st.columns([3, 1, 1, 1])
     with col_sym:
         selected_symbol = st.selectbox("币种", symbols, key="kline_symbol_selector")
     with col_tf:
         selected_tf = st.selectbox("周期", timeframes, index=2, key="kline_tf_selector")
-    with col_refresh:
-        auto_refresh = st.checkbox("自动刷新", value=False, key="kline_auto_refresh")
     with col_interval:
-        # 🔥 刷新间隔选择（仅在自动刷新开启时显示）
-        if auto_refresh:
-            refresh_interval = st.selectbox(
-                "间隔",
-                options=[1, 2, 5, 10],
-                index=0,
-                key="kline_refresh_interval",
-                format_func=lambda x: f"{x}秒"
-            )
-        else:
-            refresh_interval = 2
-            st.caption("")
-    with col_btn:
-        fetch_btn = st.button("🔄", key="fetch_kline_btn", help="手动刷新")
+        # 🔥 刷新间隔选择
+        refresh_interval = st.selectbox(
+            "间隔",
+            options=[1, 2, 5, 10],
+            index=0,
+            key="kline_refresh_interval",
+            format_func=lambda x: f"{x}秒"
+        )
     with col_status:
         api_status = check_market_api_status()
         if api_status:
@@ -903,13 +1364,8 @@ def _render_kline_chart(view_model, actions):
         else:
             st.caption("🟡 直连")
     
-    # 🔥 根据自动刷新状态选择渲染模式
-    if auto_refresh:
-        # 自动刷新模式：使用自定义 HTML 组件实现真正的实时更新
-        _render_kline_chart_realtime(selected_symbol, selected_tf, api_status, refresh_interval)
-    else:
-        # 手动刷新模式：普通渲染
-        _render_kline_chart_core(selected_symbol, selected_tf, fetch_btn, api_status, is_auto_refresh=False)
+    # 🔥 固定使用自动刷新模式
+    _render_kline_chart_realtime(selected_symbol, selected_tf, api_status, refresh_interval)
 
 
 def _render_kline_chart_realtime(selected_symbol, selected_tf, api_status, refresh_interval):
@@ -932,13 +1388,20 @@ def _render_kline_chart_realtime(selected_symbol, selected_tf, api_status, refre
     # 获取 K线数据（统一使用 1000 条，满足策略计算需求）
     ohlcv_data = []
     markers = []
-    if api_status:
+    
+    # 🔥 优先尝试 WebSocket（实时数据）
+    ws_data = _fetch_ohlcv_via_websocket(selected_symbol, selected_tf, limit=1000)
+    if ws_data and len(ws_data) >= 50:
+        ohlcv_data = ws_data
+    elif api_status:
+        # 回退到 Market API
         result = fetch_kline_from_api(selected_symbol, selected_tf, limit=1000, strategy_id=current_strategy_id)
         if result.get('ok'):
             ohlcv_data = result.get('data', [])
             markers = result.get('markers', [])
     
     if not ohlcv_data:
+        # 最后回退到直接 REST 获取
         ohlcv_data = _fetch_ohlcv_for_chart(selected_symbol, selected_tf, limit=1000)
     
     if not ohlcv_data:
@@ -1230,8 +1693,8 @@ def _render_kline_chart_core(selected_symbol, selected_tf, fetch_btn, api_status
                 # 将 OHLCV 数据转换为 DataFrame
                 df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
-                # 检查数据量是否足够
-                min_bars = 200 if current_strategy_id == 'strategy_v1' else 1000
+                # 检查数据量是否足够（统一要求 1000 条）
+                min_bars = 1000
                 if len(df) >= min_bars:
                     # 计算技术指标
                     try:
@@ -1674,9 +2137,10 @@ def render_dashboard(view_model, actions):
                             "币种": symbol,
                             "类型": "主仓",
                             "方向": pos.get("side", "LONG"),
-                            "仓位": f"${pos.get('size', 0):.2f}",
-                            "入场": f"${pos.get('entry_price', 0):.4f}",
-                            "当前": view_model.get("current_prices", {}).get(symbol, "----"),
+                            "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",  # 🔥 显示保证金
+                            "名义价值": f"${pos.get('size', 0):.2f}",  # 🔥 改名为名义价值
+                            "入场价": f"${pos.get('entry_price', 0):.4f}",
+                            "入场时间": pos.get("entry_time", "-"),
                             "浮盈": f"${pos.get('pnl', 0):+.2f}"
                         })
                 
@@ -1688,9 +2152,10 @@ def render_dashboard(view_model, actions):
                                 "币种": symbol,
                                 "类型": f"对冲仓{idx+1}",
                                 "方向": pos.get("side", "SHORT"),
-                                "仓位": f"${pos.get('size', 0):.2f}",
-                                "入场": f"${pos.get('entry_price', 0):.4f}",
-                                "当前": view_model.get("current_prices", {}).get(symbol, "----"),
+                                "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",  # 🔥 显示保证金
+                                "名义价值": f"${pos.get('size', 0):.2f}",  # 🔥 改名为名义价值
+                                "入场价": f"${pos.get('entry_price', 0):.4f}",
+                                "入场时间": pos.get("entry_time", "-"),
                                 "浮盈": f"${pos.get('pnl', 0):+.2f}"
                             })
                 
@@ -1729,56 +2194,9 @@ def render_dashboard(view_model, actions):
         
         st.divider()
         
-        # 手动扫描
-        st.subheader("📡 手动扫描")
-        with st.expander("扫描设置", expanded=False):
-            scan_syms = st.multiselect("目标", st.session_state.auto_symbols, default=st.session_state.auto_symbols[:1])
-            scan_tf = st.selectbox("周期", ["3m", "5m", "15m", "30m", "1h", "4h"], index=2)
-            if st.button(f"立即扫描 ({scan_tf})"):
-                # 调用actions中的扫描函数
-                res = actions.get("manual_scan", lambda s, t: [])(scan_syms, scan_tf)
-                if res: 
-                    st.dataframe(pd.DataFrame(res), width="stretch")
-                else: 
-                    st.info("无数据")
-        
-        st.divider()
-        
         # 🔥 K线图展开窗口（使用独立 fragment，支持折叠状态检测）
         st.subheader("📊 K线图分析")
         _render_kline_section_fragment(view_model, actions)
-        
-        st.divider()
-        
-        # 交易记录和当前持仓
-        c_log1, c_log2 = st.columns([1, 1])
-        with c_log1:
-            st.subheader("📜 历史记录 (数据库)")
-            try:
-                # 从view_model获取日志数据
-                db_logs = view_model.get("recent_logs", [])
-                if db_logs:
-                    # 格式化盈亏字段, 添加颜色
-                    for log in db_logs:
-                        pnl = log.get("pnl", 0)
-                        if pnl != 0:
-                            log['盈亏'] = f"${pnl:+.2f}"
-                        else:
-                            log['盈亏'] = "-"
-                    
-                    st.dataframe(pd.DataFrame(db_logs), width="stretch")
-                else: 
-                    st.caption("暂无记录")
-            except Exception as e:
-                st.caption(f"数据库连接中... {e}")
-                
-        with c_log2:
-            st.subheader("📦 当前持仓")
-            if open_positions:
-                d = [{"币种": k, "方向": v['side'], "仓位": f"${v['size']:.0f}", "入场": f"${v['entry_price']:.4f}"} for k,v in open_positions.items()]
-                st.dataframe(pd.DataFrame(d), width="stretch")
-            else: 
-                st.caption("空仓")
 
 
 def render_main(view_model, actions):
@@ -1822,6 +2240,86 @@ def render_main(view_model, actions):
 
     # 渲染登录页面
     render_login(view_model, actions)
+    
+    # 🔥 登录成功后显示入场动画
+    if st.session_state.get("show_intro_animation", False):
+        st.markdown("""
+        <style>
+        @keyframes fadeOut { 
+            0% { opacity: 1; z-index: 999999; } 
+            70% { opacity: 1; } 
+            100% { opacity: 0; z-index: -1; visibility: hidden; pointer-events: none; } 
+        }
+        @keyframes textShine { 
+            0% { background-position: 0% 50%; } 
+            100% { background-position: 100% 50%; } 
+        }
+        @keyframes slideUp {
+            0% { transform: translateY(30px); opacity: 0; }
+            100% { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        #intro-overlay-main { 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100vw; 
+            height: 100vh; 
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #0a0a0a 100%);
+            display: flex; 
+            flex-direction: column;
+            justify-content: center; 
+            align-items: center; 
+            animation: fadeOut 3s forwards; 
+            z-index: 999999; 
+        }
+        .intro-text-main { 
+            font-size: 72px; 
+            font-weight: 900; 
+            background: linear-gradient(90deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3, #ff6b6b); 
+            background-size: 400% auto; 
+            color: transparent; 
+            -webkit-background-clip: text; 
+            background-clip: text; 
+            animation: textShine 3s linear infinite, pulse 2s ease-in-out infinite; 
+            letter-spacing: 12px;
+            text-shadow: 0 0 30px rgba(255, 107, 107, 0.5);
+        }
+        .intro-sub-main { 
+            margin-top: 30px; 
+            font-size: 18px; 
+            color: #888 !important; 
+            text-align: center; 
+            font-family: 'Courier New', monospace; 
+            letter-spacing: 4px;
+            animation: slideUp 1s ease-out 0.5s both;
+        }
+        .intro-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+            animation: slideUp 0.8s ease-out both;
+        }
+        .intro-line {
+            width: 100px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #ff6b6b, transparent);
+            margin: 20px 0;
+            animation: slideUp 1.2s ease-out 0.3s both;
+        }
+        </style>
+        <div id="intro-overlay-main">
+            <div class="intro-icon">⚡</div>
+            <div class="intro-line"></div>
+            <div class="intro-text-main">何以为势</div>
+            <div class="intro-line"></div>
+            <div class="intro-sub-main">TRADING SYSTEM ACTIVATED</div>
+        </div>
+        """, unsafe_allow_html=True)
+        # 清除标志，只显示一次
+        st.session_state.show_intro_animation = False
     
     # 注入抖音风格CSS
     try:

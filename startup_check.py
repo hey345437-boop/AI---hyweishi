@@ -51,11 +51,11 @@ class StartupSelfCheck:
     # 禁止的模式
     FORBIDDEN_MODES = {'demo', 'sandbox', 'test'}
     
-    # 允许的模式
-    ALLOWED_MODES = {'live', 'paper_on_real'}
+    # 允许的模式（统一为 'live' 和 'paper'）
+    ALLOWED_MODES = {'live', 'paper'}
     
-    # 会被映射到 paper_on_real 的旧模式
-    LEGACY_PAPER_MODES = {'sim', 'paper'}
+    # 会被映射到 'paper' 的旧模式
+    LEGACY_PAPER_MODES = {'sim', 'paper_on_real', 'simulation', 'paper_trading'}
     
     @staticmethod
     def check_okx_environment(
@@ -100,9 +100,9 @@ class StartupSelfCheck:
         # 映射旧模式到新模式
         if mode in StartupSelfCheck.LEGACY_PAPER_MODES:
             result.warnings.append(
-                f"⚠️ 模式 '{mode}' 已废弃，自动映射为 'paper_on_real'"
+                f"⚠️ 模式 '{mode}' 已废弃，自动映射为 'paper'"
             )
-            mode = 'paper_on_real'
+            mode = 'paper'
         
         # 检查是否是禁止的模式
         if mode in StartupSelfCheck.FORBIDDEN_MODES:
@@ -303,7 +303,7 @@ def run_startup_check(raise_on_error: bool = True) -> StartupCheckResult:
         OKXEnvironmentError: 如果 raise_on_error=True 且有错误
     """
     # 从环境变量读取配置
-    run_mode = os.getenv('RUN_MODE', 'paper_on_real')
+    run_mode = os.getenv('RUN_MODE', 'paper')
     api_key = os.getenv('OKX_API_KEY', '')
     api_passphrase = os.getenv('OKX_PASSPHRASE', '')
     

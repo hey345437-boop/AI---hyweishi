@@ -493,11 +493,20 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
         ''')
         
         # 创建paper_balance表（模拟账户余额）
+        # 🔥 标准金融字段：
+        # - wallet_balance: 钱包余额（静态，充值-提现+已实现盈亏）
+        # - unrealized_pnl: 未实现盈亏
+        # - equity: 动态权益 = wallet_balance + unrealized_pnl（计算字段，不存储）
+        # - used_margin: 已用保证金
+        # - available/free_margin: 可用保证金 = equity - used_margin
         if db_kind == "postgres":
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS paper_balance (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 currency TEXT DEFAULT 'USDT',
+                wallet_balance REAL DEFAULT 200.0,
+                unrealized_pnl REAL DEFAULT 0.0,
+                used_margin REAL DEFAULT 0.0,
                 equity REAL DEFAULT 200.0,
                 available REAL DEFAULT 200.0,
                 updated_at INTEGER DEFAULT 0
@@ -508,6 +517,9 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
             CREATE TABLE IF NOT EXISTS paper_balance (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 currency TEXT DEFAULT 'USDT',
+                wallet_balance REAL DEFAULT 200.0,
+                unrealized_pnl REAL DEFAULT 0.0,
+                used_margin REAL DEFAULT 0.0,
                 equity REAL DEFAULT 200.0,
                 available REAL DEFAULT 200.0,
                 updated_at INTEGER DEFAULT 0
@@ -602,17 +614,38 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
             )
             ''')
         
-        # 初始化paper_balance表
+        # === 列迁移：为旧 paper_balance 表添加标准金融字段（必须在 INSERT 之前执行）===
+        if db_kind == "sqlite":
+            cursor.execute("PRAGMA table_info(paper_balance)")
+            pb_existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            pb_new_columns = {
+                'wallet_balance': "REAL DEFAULT 200.0",
+                'unrealized_pnl': "REAL DEFAULT 0.0",
+                'used_margin': "REAL DEFAULT 0.0",
+            }
+            
+            for col_name, col_def in pb_new_columns.items():
+                if col_name not in pb_existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE paper_balance ADD COLUMN {col_name} {col_def}")
+                        # 如果是 wallet_balance，用现有的 equity 值初始化
+                        if col_name == 'wallet_balance':
+                            cursor.execute("UPDATE paper_balance SET wallet_balance = equity WHERE wallet_balance IS NULL OR wallet_balance = 200.0")
+                    except Exception:
+                        pass
+        
+        # 初始化paper_balance表（包含标准金融字段）
         if db_kind == "postgres":
             cursor.execute('''
-            INSERT INTO paper_balance (id, currency, equity, available, updated_at)
-            VALUES (1, 'USDT', 200.0, 200.0, %s)
+            INSERT INTO paper_balance (id, currency, wallet_balance, unrealized_pnl, used_margin, equity, available, updated_at)
+            VALUES (1, 'USDT', 200.0, 0.0, 0.0, 200.0, 200.0, %s)
             ON CONFLICT (id) DO NOTHING
             ''', (current_ts,))
         else:
             cursor.execute('''
-            INSERT OR IGNORE INTO paper_balance (id, currency, equity, available, updated_at)
-            VALUES (1, 'USDT', 200.0, 200.0, ?)
+            INSERT OR IGNORE INTO paper_balance (id, currency, wallet_balance, unrealized_pnl, used_margin, equity, available, updated_at)
+            VALUES (1, 'USDT', 200.0, 0.0, 0.0, 200.0, 200.0, ?)
             ''', (current_ts,))
         
         # === 列迁移：为旧 bot_config 表添加新列（如果不存在）===
@@ -639,6 +672,8 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                 'hedge_tp_pct': "REAL DEFAULT 0.005",
                 # 🔥 双通道信号执行模式
                 'execution_mode': "TEXT DEFAULT 'intrabar'",
+                # 🔥 数据源模式: REST 或 WebSocket
+                'data_source_mode': "TEXT DEFAULT 'REST'",
             }
             
             # 逐个添加缺失的列
@@ -678,6 +713,8 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                     cursor.execute("ALTER TABLE signal_events ADD COLUMN channel_type TEXT DEFAULT NULL")
                 except Exception:
                     pass
+            
+            # 注意：paper_balance 表的迁移已移到 INSERT 之前执行
         
         conn.commit()
     finally:
@@ -1084,7 +1121,16 @@ def update_engine_status(db_config: Optional[Dict[str, Any]] = None, **status) -
 
 
 def get_paper_balance(db_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """获取模拟账户余额"""
+    """
+    获取模拟账户余额
+    
+    返回标准金融字段：
+    - wallet_balance: 钱包余额（静态）
+    - unrealized_pnl: 未实现盈亏
+    - used_margin: 已用保证金
+    - equity: 动态权益 = wallet_balance + unrealized_pnl
+    - available/free_margin: 可用保证金 = equity - used_margin
+    """
     conn, db_kind = _get_connection(db_config)
     try:
         cursor = conn.cursor()
@@ -1097,14 +1143,58 @@ def get_paper_balance(db_config: Optional[Dict[str, Any]] = None) -> Dict[str, A
         row = cursor.fetchone()
         if row:
             columns = [col[0] for col in cursor.description]
-            return dict(zip(columns, row))
-        return {"id": 1, "currency": "USDT", "equity": 200.0, "available": 200.0, "updated_at": 0}
+            result = dict(zip(columns, row))
+            
+            # 确保新字段存在（兼容旧数据库）
+            if 'wallet_balance' not in result:
+                result['wallet_balance'] = result.get('equity', 200.0)
+            if 'unrealized_pnl' not in result:
+                result['unrealized_pnl'] = 0.0
+            if 'used_margin' not in result:
+                result['used_margin'] = 0.0
+            
+            # 计算派生字段（确保一致性）
+            result['equity'] = result['wallet_balance'] + result['unrealized_pnl']
+            result['free_margin'] = result['equity'] - result['used_margin']
+            result['available'] = result['free_margin']  # 兼容旧代码
+            
+            return result
+        
+        # 默认值
+        return {
+            "id": 1, 
+            "currency": "USDT", 
+            "wallet_balance": 200.0,
+            "unrealized_pnl": 0.0,
+            "used_margin": 0.0,
+            "equity": 200.0, 
+            "available": 200.0,
+            "free_margin": 200.0,
+            "updated_at": 0
+        }
     finally:
         conn.close()
 
 
-def update_paper_balance(equity: Optional[float] = None, available: Optional[float] = None, updated_at: Optional[int] = None, db_config: Optional[Dict[str, Any]] = None) -> None:
-    """更新模拟账户余额"""
+def update_paper_balance(
+    wallet_balance: Optional[float] = None,
+    unrealized_pnl: Optional[float] = None,
+    used_margin: Optional[float] = None,
+    equity: Optional[float] = None,
+    available: Optional[float] = None,
+    updated_at: Optional[int] = None,
+    db_config: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    更新模拟账户余额
+    
+    标准金融字段：
+    - wallet_balance: 钱包余额（静态）
+    - unrealized_pnl: 未实现盈亏
+    - used_margin: 已用保证金
+    - equity: 动态权益（如果提供则直接使用，否则计算）
+    - available: 可用保证金（如果提供则直接使用，否则计算）
+    """
     conn, db_kind = _get_connection(db_config)
     try:
         cursor = conn.cursor()
@@ -1113,23 +1203,43 @@ def update_paper_balance(equity: Optional[float] = None, available: Optional[flo
         balance = get_paper_balance(db_config)
         
         # 更新字段
+        if wallet_balance is not None:
+            balance['wallet_balance'] = wallet_balance
+        if unrealized_pnl is not None:
+            balance['unrealized_pnl'] = unrealized_pnl
+        if used_margin is not None:
+            balance['used_margin'] = used_margin
+        
+        # 计算派生字段
         if equity is not None:
             balance['equity'] = equity
+        else:
+            # equity = wallet_balance + unrealized_pnl
+            balance['equity'] = balance['wallet_balance'] + balance['unrealized_pnl']
+        
         if available is not None:
             balance['available'] = available
+        else:
+            # available = equity - used_margin
+            balance['available'] = balance['equity'] - balance['used_margin']
+        
         if updated_at is not None:
             balance['updated_at'] = updated_at
         else:
             balance['updated_at'] = int(time.time())
         
-        # 执行更新
+        # 执行更新（包含新字段）
         if db_kind == "postgres":
             cursor.execute('''
             UPDATE paper_balance 
-            SET currency = %s, equity = %s, available = %s, updated_at = %s 
+            SET currency = %s, wallet_balance = %s, unrealized_pnl = %s, 
+                used_margin = %s, equity = %s, available = %s, updated_at = %s 
             WHERE id = 1
             ''', (
                 balance['currency'],
+                balance['wallet_balance'],
+                balance['unrealized_pnl'],
+                balance['used_margin'],
                 balance['equity'],
                 balance['available'],
                 balance['updated_at']
@@ -1137,10 +1247,14 @@ def update_paper_balance(equity: Optional[float] = None, available: Optional[flo
         else:
             cursor.execute('''
             UPDATE paper_balance 
-            SET currency = ?, equity = ?, available = ?, updated_at = ? 
+            SET currency = ?, wallet_balance = ?, unrealized_pnl = ?, 
+                used_margin = ?, equity = ?, available = ?, updated_at = ? 
             WHERE id = 1
             ''', (
                 balance['currency'],
+                balance['wallet_balance'],
+                balance['unrealized_pnl'],
+                balance['used_margin'],
                 balance['equity'],
                 balance['available'],
                 balance['updated_at']
@@ -1247,29 +1361,32 @@ def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = Non
                 ))
         else:
             # 插入新记录
+            current_ts = int(time.time())
             if db_kind == "postgres":
                 cursor.execute('''
-                INSERT INTO paper_positions (symbol, pos_side, qty, entry_price, unrealized_pnl, updated_at) 
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO paper_positions (symbol, pos_side, qty, entry_price, unrealized_pnl, created_at, updated_at) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ''', (
                     symbol,
                     pos_side,
                     qty or 0.0,
                     entry_price or 0.0,
                     unrealized_pnl or 0.0,
-                    updated_at or int(time.time())
+                    current_ts,  # 🔥 添加 created_at
+                    updated_at or current_ts
                 ))
             else:
                 cursor.execute('''
-                INSERT INTO paper_positions (symbol, pos_side, qty, entry_price, unrealized_pnl, updated_at) 
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO paper_positions (symbol, pos_side, qty, entry_price, unrealized_pnl, created_at, updated_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     symbol,
                     pos_side,
                     qty or 0.0,
                     entry_price or 0.0,
                     unrealized_pnl or 0.0,
-                    updated_at or int(time.time())
+                    current_ts,  # 🔥 添加 created_at
+                    updated_at or current_ts
                 ))
         
         conn.commit()

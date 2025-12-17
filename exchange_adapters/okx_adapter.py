@@ -200,18 +200,33 @@ class OKXAdapter(ExchangeAdapter):
         self.secret = config.get('api_secret')
         self.password = config.get('api_passphrase')
         
-        # 🔥 关键修复：强制使用实盘模式
-        # run_mode: 'live' = 真实下单, 'paper_on_real' = 本地模拟
-        self.run_mode = config.get('run_mode', 'paper_on_real')
+        # 🔥 关键修复：统一使用 'live' 和 'paper' 两种模式
+        # run_mode: 'live' = 真实下单, 'paper' = 本地模拟
+        raw_mode = config.get('run_mode', 'paper')
         
         # 🔥 强制禁用 sandbox/demo
         # 无论传入什么配置，都强制设为 False
         self._sandbox_disabled = True
         
-        # 兼容旧配置：将 'sim' 映射到 'paper_on_real'
-        if self.run_mode in ('sim', 'paper', 'demo'):
-            self.run_mode = 'paper_on_real'
-            logger.warning(f"[CONFIG] run_mode '{config.get('run_mode')}' 已映射为 'paper_on_real'")
+        # 🔥 统一模式映射
+        # 禁止的模式
+        FORBIDDEN_MODES = {'demo', 'sandbox', 'test'}
+        if raw_mode.lower() in FORBIDDEN_MODES:
+            raise OKXEnvironmentError(
+                f"模式 '{raw_mode}' 不允许！本系统只支持 'live' 和 'paper' 模式。"
+            )
+        
+        # 兼容旧配置：将 'sim', 'paper_on_real' 映射到 'paper'
+        PAPER_ALIASES = {'sim', 'paper_on_real', 'simulation', 'paper_trading'}
+        if raw_mode.lower() in PAPER_ALIASES:
+            self.run_mode = 'paper'
+            if raw_mode.lower() != 'paper':
+                logger.warning(f"[CONFIG] run_mode '{raw_mode}' 已映射为 'paper'")
+        elif raw_mode.lower() == 'live':
+            self.run_mode = 'live'
+        else:
+            self.run_mode = 'paper'
+            logger.warning(f"[CONFIG] 未知 run_mode '{raw_mode}'，默认使用 'paper'")
         
         self.exchange = None
         self.options = config.get('options', {})
@@ -635,17 +650,17 @@ class OKXAdapter(ExchangeAdapter):
                 params['reduceOnly'] = True
             
             # 🔥 关键路由：根据 run_mode 决定是否真实下单
-            if self.run_mode == 'paper_on_real':
-                # paper_on_real 模式：路由到本地模拟
+            if self.run_mode == 'paper':
+                # paper 模式：路由到本地模拟
                 logger.warning(
                     f"[paper] blocked_real_trade op=create_order "
                     f"symbol={normalized_symbol} side={side} amount={amount} "
-                    f"reason=paper_on_real"
+                    f"reason=paper_mode"
                 )
                 print(
                     f"[paper] blocked_real_trade op=create_order "
                     f"symbol={normalized_symbol} side={side} amount={amount} "
-                    f"reason=paper_on_real"
+                    f"reason=paper_mode"
                 )
                 
                 # 获取当前价格用于模拟
@@ -729,16 +744,16 @@ class OKXAdapter(ExchangeAdapter):
             normalized_symbol = self.normalize_symbol(symbol) if symbol else None
             
             # 🔥 关键路由
-            if self.run_mode == 'paper_on_real':
+            if self.run_mode == 'paper':
                 logger.warning(
                     f"[paper] blocked_real_trade op=cancel_order "
                     f"order_id={order_id} symbol={normalized_symbol} "
-                    f"reason=paper_on_real"
+                    f"reason=paper_mode"
                 )
                 print(
                     f"[paper] blocked_real_trade op=cancel_order "
                     f"order_id={order_id} symbol={normalized_symbol} "
-                    f"reason=paper_on_real"
+                    f"reason=paper_mode"
                 )
                 return self.paper_broker.cancel_order(order_id, normalized_symbol)
             else:
@@ -963,16 +978,16 @@ class OKXAdapter(ExchangeAdapter):
             normalized_symbol = self.normalize_symbol(symbol)
             
             # 🔥 关键路由
-            if self.run_mode == 'paper_on_real':
+            if self.run_mode == 'paper':
                 logger.warning(
                     f"[paper] blocked_real_trade op=close_position "
                     f"symbol={normalized_symbol} pos_side={pos_side} amount={amount} "
-                    f"reason=paper_on_real"
+                    f"reason=paper_mode"
                 )
                 print(
                     f"[paper] blocked_real_trade op=close_position "
                     f"symbol={normalized_symbol} pos_side={pos_side} amount={amount} "
-                    f"reason=paper_on_real"
+                    f"reason=paper_mode"
                 )
                 
                 # 模拟平仓
@@ -1012,7 +1027,7 @@ class OKXAdapter(ExchangeAdapter):
     
     def is_paper_mode(self) -> bool:
         """检查是否为模拟模式"""
-        return self.run_mode == 'paper_on_real'
+        return self.run_mode == 'paper'
     
     def is_live_mode(self) -> bool:
         """检查是否为实盘模式"""

@@ -83,19 +83,31 @@ class KlineCache:
 
 # ============ OKX 交易所连接 ============
 class OKXClient:
-    """OKX 交易所客户端（只读，用于获取行情）"""
+    """OKX 交易所客户端（只读，用于获取行情）
+    
+    🔥 双 Key 机制：优先使用行情专用 Key，避免挤占交易接口的 Rate Limit
+    """
     
     def __init__(self):
         self.exchange = None
+        self.is_dedicated_key = False  # 是否使用独立行情 Key
         self._init_exchange()
     
     def _init_exchange(self):
-        """初始化交易所连接"""
+        """初始化交易所连接（优先使用行情专用 Key）"""
         try:
-            # 从环境变量读取 API 密钥（可选，公开行情不需要）
-            api_key = os.getenv("OKX_API_KEY", "")
-            api_secret = os.getenv("OKX_API_SECRET", "")
-            api_passphrase = os.getenv("OKX_API_PASSPHRASE", "")
+            # 🔥 双 Key 机制：优先使用行情专用 Key
+            market_key = os.getenv("MARKET_DATA_API_KEY", "")
+            market_secret = os.getenv("MARKET_DATA_SECRET", "")
+            market_passphrase = os.getenv("MARKET_DATA_PASSPHRASE", "")
+            
+            # 回退到交易 Key
+            api_key = market_key or os.getenv("OKX_API_KEY", "")
+            api_secret = market_secret or os.getenv("OKX_API_SECRET", "")
+            api_passphrase = market_passphrase or os.getenv("OKX_API_PASSPHRASE", "")
+            
+            # 记录是否使用独立行情 Key
+            self.is_dedicated_key = bool(market_key and market_secret and market_passphrase)
             
             # 获取代理配置
             http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
@@ -123,14 +135,19 @@ class OKXClient:
                 config['password'] = api_passphrase
             
             self.exchange = ccxt.okx(config)
-            print("✅ OKX 交易所连接初始化成功")
+            
+            # 打印 Key 类型
+            if self.is_dedicated_key:
+                print("✅ OKX 行情服务初始化成功 (使用独立行情 Key 🔐)")
+            else:
+                print("✅ OKX 行情服务初始化成功 (使用交易 Key)")
         except Exception as e:
             print(f"❌ OKX 交易所连接失败: {e}")
             self.exchange = None
     
     def fetch_ohlcv(self, symbol: str, timeframe: str = '1m', limit: int = 500) -> List[List]:
         """
-        获取 K线数据
+        获取 K线数据（支持分页拉取超过 300 根）
         
         参数:
         - symbol: 交易对，如 "BTC/USDT:USDT"
@@ -144,10 +161,87 @@ class OKXClient:
             raise Exception("交易所未连接")
         
         try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-            return ohlcv
+            # OKX 单次最多返回 300 根 K线，需要分页拉取
+            OKX_PAGE_SIZE = 300
+            
+            if limit <= OKX_PAGE_SIZE:
+                # 单次请求即可
+                return self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            
+            # 🔥 分页拉取逻辑
+            tf_ms = self._get_timeframe_ms(timeframe)
+            all_candles = []
+            seen_timestamps = set()
+            
+            # 计算起始时间（从过去开始向后拉取）
+            now_ms = int(time.time() * 1000)
+            start_ts = now_ms - (limit + 50) * tf_ms  # 多拉一些确保足够
+            
+            current_since = start_ts
+            max_pages = (limit // OKX_PAGE_SIZE) + 3  # 最多拉取的页数
+            
+            for page in range(max_pages):
+                if len(all_candles) >= limit:
+                    break
+                
+                data = self.exchange.fetch_ohlcv(
+                    symbol, timeframe, 
+                    since=current_since, 
+                    limit=OKX_PAGE_SIZE
+                )
+                
+                if not data:
+                    break
+                
+                # 去重并添加
+                new_count = 0
+                max_ts = 0
+                for candle in data:
+                    ts = candle[0]
+                    if ts not in seen_timestamps:
+                        seen_timestamps.add(ts)
+                        all_candles.append(candle)
+                        new_count += 1
+                    if ts > max_ts:
+                        max_ts = ts
+                
+                if new_count == 0:
+                    break
+                
+                # 检查是否已拉取到最新
+                if max_ts >= now_ms - tf_ms:
+                    break
+                
+                # 更新 since 为本页最大时间戳 + 1ms
+                current_since = max_ts + 1
+                
+                # 短暂延迟避免限流
+                time.sleep(0.05)
+            
+            # 按时间戳排序并截取
+            all_candles.sort(key=lambda x: x[0])
+            return all_candles[-limit:] if len(all_candles) > limit else all_candles
+            
         except Exception as e:
             raise Exception(f"获取K线失败: {e}")
+    
+    def _get_timeframe_ms(self, timeframe: str) -> int:
+        """将时间周期转换为毫秒"""
+        tf_map = {
+            '1m': 60 * 1000,
+            '3m': 3 * 60 * 1000,
+            '5m': 5 * 60 * 1000,
+            '15m': 15 * 60 * 1000,
+            '30m': 30 * 60 * 1000,
+            '1h': 60 * 60 * 1000,
+            '2h': 2 * 60 * 60 * 1000,
+            '4h': 4 * 60 * 60 * 1000,
+            '6h': 6 * 60 * 60 * 1000,
+            '12h': 12 * 60 * 60 * 1000,
+            '1d': 24 * 60 * 60 * 1000,
+            '1w': 7 * 24 * 60 * 60 * 1000,
+        }
+        return tf_map.get(timeframe, 60 * 1000)
 
 
 # ============ 全局实例 ============
@@ -187,44 +281,65 @@ def _calculate_strategy_markers(ohlcv: List[List], symbol: str, timeframe: str, 
         # 将 OHLCV 转换为 DataFrame
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # 检查数据量是否足够
-        min_bars = 200 if strategy_id == 'strategy_v1' else 1000
+        # 🔥 保存原始毫秒时间戳用于 marker 显示
+        df['timestamp_ms'] = df['timestamp'].copy()
+        
+        # 🔥 转换 timestamp 为 datetime 类型（与 trade_engine 一致）
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        # 检查数据量是否足够（统一要求 1000 条）
+        min_bars = 1000
         if len(df) < min_bars:
             print(f"[market_api] K线数据不足: {len(df)} < {min_bars}，跳过信号计算")
             return markers
         
+        print(f"[market_api] 开始计算策略信号 | 策略: {strategy_id} | 周期: {timeframe} | K线数: {len(df)}")
+        
         # 计算技术指标
         try:
             df_with_indicators = strategy.calculate_indicators(df)
+            print(f"[market_api] 指标计算完成 | 列数: {len(df_with_indicators.columns)}")
         except ValueError as e:
             print(f"[market_api] 指标计算失败: {e}")
             return markers
         
         # 🔥 遍历历史 K线，检查每根 K线的信号
-        # 从第 min_bars 根开始（确保有足够的历史数据计算指标）
+        # 需要至少 200 根历史数据来计算指标（EMA 初始化）
         # 为了性能，只检查最近 200 根 K线的信号
-        start_idx = max(min_bars, len(df) - 200)
+        # 🔥 修复：start_idx 应该是 max(200, len(df) - 200)，而不是 max(1000, ...)
+        # 因为我们只需要 200 根历史数据来初始化指标，然后检查后面的信号
+        start_idx = max(200, len(df) - 200)
         
         # 北京时间偏移（秒）
         BEIJING_OFFSET_SEC = 8 * 3600
         
-        for i in range(start_idx, len(df) - 1):
-            # 构造截止到当前 K线的子 DataFrame
-            # 策略的 check_signals 使用 df.iloc[-1] 和 df.iloc[-2]
-            # 所以我们需要传入截止到 i+1 的数据（让 iloc[-1] 指向第 i 根）
-            sub_df = df_with_indicators.iloc[:i+2].copy()
+        signal_count = 0
+        hold_count = 0
+        error_count = 0
+        
+        for i in range(start_idx, len(df) - 2):
+            # 🔥 00秒确认模式：策略使用 df.iloc[-2] 作为"当前K线"
+            # 所以我们需要传入截止到 i+2 的数据（让 iloc[-2] 指向第 i 根）
+            # 即：sub_df.iloc[-2] = df.iloc[i]，sub_df.iloc[-1] = df.iloc[i+1]
+            # 需要 i+2 < len(df)，所以循环到 len(df) - 2
+            sub_df = df_with_indicators.iloc[:i+3].copy()
+            
+            # 确保有足够的数据（至少4根K线用于 iloc[-2], [-3], [-4]）
+            if len(sub_df) < 4:
+                continue
             
             try:
                 # 调用策略的信号检查方法
                 signal = strategy.check_signals(sub_df, timeframe=timeframe)
                 
                 if signal and signal.get('action') in ['LONG', 'SHORT']:
+                    # 🔥 修复：信号计数和 marker 创建应该在 LONG/SHORT 分支内
+                    signal_count += 1
                     action = signal['action']
                     signal_type = signal.get('type', 'UNKNOWN')
-                    reason = signal.get('reason', '')
                     
-                    # 获取信号 K线的时间戳（第 i 根 K线）
-                    ts_ms = int(df.iloc[i]['timestamp'])
+                    # 🔥 获取信号 K线的时间戳（第 i 根 K线，对应 sub_df.iloc[-2]）
+                    ts_ms = int(df.iloc[i]['timestamp_ms'])
                     ts_sec = int(ts_ms / 1000) + BEIJING_OFFSET_SEC
                     
                     # 构造 marker
@@ -244,11 +359,14 @@ def _calculate_strategy_markers(ohlcv: List[List], symbol: str, timeframe: str, 
                             "color": "#ef5350",
                             "text": f"SELL\n{signal_type}"
                         })
+                elif signal and signal.get('action') == 'HOLD':
+                    hold_count += 1
             except Exception as e:
                 # 单根 K线计算失败，跳过
+                error_count += 1
                 continue
         
-        print(f"[market_api] 策略 {strategy_id} 计算完成，发现 {len(markers)} 个信号")
+        print(f"[market_api] 策略 {strategy_id} 计算完成 | 信号: {signal_count} | HOLD: {hold_count} | 错误: {error_count} | markers: {len(markers)}")
         
     except Exception as e:
         print(f"[market_api] 策略信号计算失败: {e}")
@@ -336,28 +454,33 @@ if FASTAPI_AVAILABLE:
             # 自动补全结算货币：BTC/USDT -> BTC/USDT:USDT
             symbol = f"{symbol}:USDT"
         
+        # 🔥 如果需要计算策略信号，强制拉取至少 1000 条数据
+        actual_limit = limit
+        if strategy:
+            actual_limit = max(limit, 1000)
+        
         # 检查缓存
         cached_data = cache.get(symbol, tf)
         ohlcv = None
         is_cached = False
         
-        if cached_data:
-            ohlcv = cached_data[-limit:]
+        if cached_data and len(cached_data) >= actual_limit:
+            ohlcv = cached_data[-actual_limit:]
             is_cached = True
         else:
             # 从交易所获取
             try:
-                ohlcv = okx_client.fetch_ohlcv(symbol, tf, limit)
+                ohlcv = okx_client.fetch_ohlcv(symbol, tf, actual_limit)
                 # 更新缓存
                 cache.set(symbol, tf, ohlcv)
             except Exception as e:
-                print(f"[market_api] 获取K线失败 symbol={symbol} tf={tf} limit={limit}: {e}")
+                print(f"[market_api] 获取K线失败 symbol={symbol} tf={tf} limit={actual_limit}: {e}")
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=str(e))
         
-        # 🔥 计算策略信号标记
+        # 🔥 计算策略信号标记（需要至少 1000 条数据）
         markers = []
-        if strategy and ohlcv and len(ohlcv) > 200:
+        if strategy and ohlcv and len(ohlcv) >= 1000:
             markers = _calculate_strategy_markers(ohlcv, symbol, tf, strategy)
         
         return {
@@ -415,29 +538,54 @@ if FASTAPI_AVAILABLE:
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.get("/symbols")
-    async def get_symbols():
+    async def get_symbols(top: int = Query(100, description="返回成交量前N的币种")):
         """
-        获取支持的交易对列表
-        """
-        # 常用交易对
-        common_symbols = [
-            "BTC/USDT:USDT",
-            "ETH/USDT:USDT",
-            "SOL/USDT:USDT",
-            "DOGE/USDT:USDT",
-            "XRP/USDT:USDT",
-            "BNB/USDT:USDT",
-            "ADA/USDT:USDT",
-            "AVAX/USDT:USDT",
-            "DOT/USDT:USDT",
-            "MATIC/USDT:USDT",
-        ]
+        获取成交量前N的交易对列表（实时从交易所获取）
         
-        return {
-            "symbols": common_symbols,
-            "count": len(common_symbols),
-            "timestamp": int(time.time() * 1000)
-        }
+        返回按24h成交量降序排列的永续合约交易对
+        """
+        try:
+            if not okx_client.exchange:
+                raise Exception("交易所未连接")
+            
+            # 获取所有永续合约的 tickers
+            tickers = okx_client.exchange.fetch_tickers()
+            
+            # 筛选 USDT 永续合约并按成交量排序
+            usdt_swaps = []
+            for symbol, ticker in tickers.items():
+                # 只要 USDT 永续合约
+                if ':USDT' in symbol and '/USDT' in symbol:
+                    volume = ticker.get('quoteVolume', 0) or 0  # 24h USDT 成交额
+                    usdt_swaps.append({
+                        'symbol': symbol,
+                        'volume': volume,
+                        'last': ticker.get('last', 0)
+                    })
+            
+            # 按成交量降序排序
+            usdt_swaps.sort(key=lambda x: x['volume'], reverse=True)
+            
+            # 取前 N 个
+            top_symbols = [item['symbol'] for item in usdt_swaps[:top]]
+            
+            return {
+                "symbols": top_symbols,
+                "count": len(top_symbols),
+                "total_available": len(usdt_swaps),
+                "timestamp": int(time.time() * 1000)
+            }
+        except Exception as e:
+            print(f"[market_api] 获取交易对列表失败: {e}")
+            # 回退到静态列表
+            fallback = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", 
+                       "DOGE/USDT:USDT", "XRP/USDT:USDT"]
+            return {
+                "symbols": fallback,
+                "count": len(fallback),
+                "error": str(e)[:100],
+                "timestamp": int(time.time() * 1000)
+            }
 
 
 # ============ 主入口 ============

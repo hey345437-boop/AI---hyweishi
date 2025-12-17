@@ -112,7 +112,7 @@ class TradingStrategyV1:
         df['pk'] = self.bcwsma(rsv, self.kdj_isig, 1)
         df['pd'] = self.bcwsma(df['pk'], self.kdj_isig, 1)
         
-        # === 3. OBV-ADX ===
+        # === 3. OBV-ADX (完全按照Pine Script逻辑) ===
         obv = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
         
         up_bottom = obv.diff()
@@ -130,15 +130,18 @@ class TradingStrategyV1:
             0
         ), index=df.index)
         
-        tr_ur = self.calculate_rma(obv.rolling(self.obv_len).std(), self.obv_len).replace(0, 1e-10)
+        # 🔥 计算trur: ta.rma(ta.stdev(ta.obv, len_bottom), len_bottom)
+        # TradingView ta.stdev 使用样本标准差 (ddof=1)
+        obv_stdev = obv.rolling(self.obv_len).std(ddof=1)
+        tr_ur = self.calculate_rma(obv_stdev.fillna(0), self.obv_len).replace(0, 1e-10)
         
-        # 修复：完全按照Pine Script的OBV-ADX计算
+        # 🔥 计算plus和minus: 100 * ta.ema(plusDM_bottom, len_bottom) / trur_bottom
         plus_bottom = 100 * self.calculate_ema(plusDM_bottom, self.obv_len) / tr_ur
         minus_bottom = 100 * self.calculate_ema(minusDM_bottom, self.obv_len) / tr_ur
         
-        # 处理NaN值 (对应fixnan)
-        plus_bottom = plus_bottom.fillna(0)
-        minus_bottom = minus_bottom.fillna(0)
+        # 🔥 处理NaN值 (对应 fixnan - 用前一个有效值填充)
+        plus_bottom = plus_bottom.ffill().fillna(0)
+        minus_bottom = minus_bottom.ffill().fillna(0)
         
         sum_bottom = plus_bottom + minus_bottom
         sum_bottom = sum_bottom.replace(0, 1)  # 避免除零
@@ -411,7 +414,7 @@ class TradingStrategyV1:
         curr = df.iloc[-2]
         prev = df.iloc[-3]
         
-        # === 顶底信号 ===
+        # === 顶底信号 (完整实现，包含扩展信号) ===
         stoch_os = curr['stoch_k'] < 20
         stoch_ob = curr['stoch_k'] > 80
         kdj_gold = (prev['pk'] < prev['pd']) and (curr['pk'] > curr['pd'])
@@ -419,11 +422,43 @@ class TradingStrategyV1:
         smi_kdj_buy = stoch_os and kdj_gold
         smi_kdj_sell = stoch_ob and kdj_dead
         
+        # 🔥 OBV-ADX 信号条件
         obv_buy = (curr['obv_minus'] >= 22) and (curr['obv_adx'] >= 22) and (curr['obv_plus'] <= 18)
         obv_sell = (curr['obv_plus'] >= 22) and (curr['obv_adx'] >= 22) and (curr['obv_minus'] <= 18)
         
-        bottom_buy = smi_kdj_buy and obv_buy
-        bottom_sell = smi_kdj_sell and obv_sell
+        # 🔥 基础信号：KDJ + OBV 同时满足
+        basic_buy_signal = smi_kdj_buy and obv_buy
+        basic_sell_signal = smi_kdj_sell and obv_sell
+        
+        # 🔥 扩展信号逻辑（平衡模式）- 完全对齐TradingView逻辑
+        # TradingView: 记录OBV信号出现的bar_index，当前bar与该bar距离 <= choose_bottom 时触发
+        extended_buy_signal = False
+        extended_sell_signal = False
+        
+        if self.more_bottom and len(df) >= 4:
+            # 🔥 修复：TradingView的逻辑是 (bar_index - obv_buy_bar_bottom) <= choose_bottom
+            # 回溯范围是 [0, choose_bottom]，共 choose_bottom+1 根K线
+            for lookback in range(0, self.choose_bottom + 1):
+                check_idx = -(2 + lookback)  # -2, -3, -4, ...
+                if len(df) >= abs(check_idx):
+                    past = df.iloc[check_idx]
+                    past_obv_buy = (past['obv_minus'] >= 22) and (past['obv_adx'] >= 22) and (past['obv_plus'] <= 18)
+                    if past_obv_buy and smi_kdj_buy:
+                        extended_buy_signal = True
+                        break
+            
+            for lookback in range(0, self.choose_bottom + 1):
+                check_idx = -(2 + lookback)
+                if len(df) >= abs(check_idx):
+                    past = df.iloc[check_idx]
+                    past_obv_sell = (past['obv_plus'] >= 22) and (past['obv_adx'] >= 22) and (past['obv_minus'] <= 18)
+                    if past_obv_sell and smi_kdj_sell:
+                        extended_sell_signal = True
+                        break
+        
+        # 🔥 组合信号：基础信号 OR 扩展信号
+        bottom_buy = basic_buy_signal or extended_buy_signal
+        bottom_sell = basic_sell_signal or extended_sell_signal
         
         # === 趋势1主信号 ===
         is_trending = (curr['trend_adx'] > self.osc_len) and (curr['adx_slope'] > 0)
@@ -595,10 +630,11 @@ class TradingStrategyV1:
                 else:
                     rsi_val = 50.0
                 
-                # 🔥 获取K线时间戳（使用当前K线，与信号计算一致）
+                # 🔥 获取K线时间戳（使用已收盘的K线，与信号计算一致）
+                # 因为信号是基于 df.iloc[-2] 计算的（00秒确认模式），所以去重也用 df.iloc[-2] 的时间戳
                 candle_time = None
-                if len(df_with_indicators) >= 1:
-                    candle_time = df_with_indicators.iloc[-1]['timestamp']
+                if len(df_with_indicators) >= 2:
+                    candle_time = df_with_indicators.iloc[-2]['timestamp']
                 
                 scan_results.append({
                     "tf": tf,

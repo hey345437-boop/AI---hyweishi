@@ -229,19 +229,37 @@ def main():
                 for pos in paper_positions:
                     if isinstance(pos, dict) and "symbol" in pos:
                         symbol = pos["symbol"]
+                        # 🔥 转换入场时间戳为可读格式
+                        created_ts = pos.get("created_at", 0)
+                        entry_time_str = ""
+                        if created_ts and created_ts > 0:
+                            from datetime import datetime
+                            entry_time_str = datetime.fromtimestamp(created_ts).strftime('%m-%d %H:%M')
+                        notional = pos["qty"] * pos["entry_price"]
                         open_positions_dict[symbol] = {
                             "side": pos["side"],
-                            "size": pos["qty"] * pos["entry_price"],  # 计算持仓价值
-                            "entry_price": pos["entry_price"]
+                            "size": notional,  # 名义价值
+                            "margin": notional / 20,  # 🔥 保证金（假设20x杠杆）
+                            "entry_price": pos["entry_price"],
+                            "entry_time": entry_time_str  # 🔥 添加入场时间
                         }
             elif isinstance(paper_positions, dict):
                 # 如果paper_positions是字典格式，直接使用
                 for symbol, pos in paper_positions.items():
                     if isinstance(pos, dict):
+                        # 🔥 转换入场时间戳为可读格式
+                        created_ts = pos.get("created_at", 0)
+                        entry_time_str = ""
+                        if created_ts and created_ts > 0:
+                            from datetime import datetime
+                            entry_time_str = datetime.fromtimestamp(created_ts).strftime('%m-%d %H:%M')
+                        notional = pos.get("qty", 0) * pos.get("entry_price", 0)
                         open_positions_dict[symbol] = {
                             "side": pos.get("side", "long"),
-                            "size": pos.get("qty", 0) * pos.get("entry_price", 0),  # 计算持仓价值
-                            "entry_price": pos.get("entry_price", 0)
+                            "size": notional,  # 名义价值
+                            "margin": notional / 20,  # 🔥 保证金（假设20x杠杆）
+                            "entry_price": pos.get("entry_price", 0),
+                            "entry_time": entry_time_str  # 🔥 添加入场时间
                         }
             view_model["open_positions"] = open_positions_dict
     
