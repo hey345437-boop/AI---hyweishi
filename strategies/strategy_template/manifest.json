@@ -1,0 +1,9 @@
+{
+  "strategy_id": "strategy_template",
+  "display_name": "模板策略",
+  "version": "1.0.0",
+  "description": "用户自定义策略模板，复制此目录并修改以创建新策略",
+  "author": "Your Name",
+  "class_name": "TemplateStrategy",
+  "order": 999
+}
