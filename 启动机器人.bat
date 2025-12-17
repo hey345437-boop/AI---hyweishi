@@ -7,6 +7,30 @@ echo     启动量化交易系统（后端 + 前端）
 echo ==========================================
 echo.
 
+REM ========== 🔥 先杀死旧进程，避免端口冲突 ==========
+echo [0/5] 清理旧进程...
+
+REM 杀死占用 8000 端口的进程（Market API）
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000.*LISTENING"') do (
+    echo       终止旧 Market API 进程 (PID: %%a)
+    taskkill /F /PID %%a >nul 2>&1
+)
+
+REM 杀死占用 8501 端口的进程（Streamlit）
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8501.*LISTENING"') do (
+    echo       终止旧 Streamlit 进程 (PID: %%a)
+    taskkill /F /PID %%a >nul 2>&1
+)
+
+REM 杀死残留的 trade_engine.py 进程
+for /f "tokens=2" %%a in ('tasklist /FI "WINDOWTITLE eq Trading Bot Backend*" /FO LIST ^| findstr "PID:"') do (
+    echo       终止旧后端进程 (PID: %%a)
+    taskkill /F /PID %%a >nul 2>&1
+)
+
+echo       旧进程清理完成
+echo.
+
 REM 创建日志目录
 if not exist "logs" mkdir logs
 
