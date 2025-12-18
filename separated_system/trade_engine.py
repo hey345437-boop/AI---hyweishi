@@ -2485,7 +2485,12 @@ def main():
                     is_hedge_order = False
                     if main_pos:
                         main_side = main_pos.get('pos_side', 'long').upper()
-                        if signal_action.upper() != main_side:
+                        if signal_action.upper() == main_side:
+                            # 🔥 已有同方向主仓，跳过（不加仓）
+                            logger.debug(f"[skip] {symbol} 已有同方向主仓 {main_side}，跳过")
+                            continue
+                        else:
+                            # 信号方向与主仓相反，开对冲单
                             can_hedge, hedge_reason = hedge_manager.can_open_hedge(symbol)
                             if not can_hedge:
                                 continue
