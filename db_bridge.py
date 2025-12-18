@@ -616,6 +616,40 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
             )
             ''')
         
+        # 🔥 创建trade_history表（记录每次平仓的盈亏，用于计算胜率等统计）
+        if db_kind == "postgres":
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id SERIAL PRIMARY KEY,
+                ts INTEGER DEFAULT 0,
+                symbol TEXT,
+                pos_side TEXT,
+                entry_price REAL DEFAULT 0.0,
+                exit_price REAL DEFAULT 0.0,
+                qty REAL DEFAULT 0.0,
+                pnl REAL DEFAULT 0.0,
+                pnl_pct REAL DEFAULT 0.0,
+                hold_time INTEGER DEFAULT 0,
+                note TEXT DEFAULT ''
+            )
+            ''')
+        else:
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER DEFAULT 0,
+                symbol TEXT,
+                pos_side TEXT,
+                entry_price REAL DEFAULT 0.0,
+                exit_price REAL DEFAULT 0.0,
+                qty REAL DEFAULT 0.0,
+                pnl REAL DEFAULT 0.0,
+                pnl_pct REAL DEFAULT 0.0,
+                hold_time INTEGER DEFAULT 0,
+                note TEXT DEFAULT ''
+            )
+            ''')
+        
         # === 列迁移：为旧 paper_balance 表添加标准金融字段（必须在 INSERT 之前执行）===
         if db_kind == "sqlite":
             cursor.execute("PRAGMA table_info(paper_balance)")
@@ -2243,5 +2277,166 @@ def clear_signal_cache_db(db_config: Optional[Dict[str, Any]] = None) -> None:
         cursor = conn.cursor()
         cursor.execute('DELETE FROM signal_cache')
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ============ 交易历史统计函数 ============
+
+def insert_trade_history(
+    symbol: str,
+    pos_side: str,
+    entry_price: float,
+    exit_price: float,
+    qty: float,
+    pnl: float,
+    hold_time: int = 0,
+    note: str = '',
+    db_config: Optional[Dict[str, Any]] = None
+) -> int:
+    """插入交易历史记录（平仓时调用）
+    
+    Args:
+        symbol: 交易对符号
+        pos_side: 持仓方向 (long/short)
+        entry_price: 入场价格
+        exit_price: 出场价格
+        qty: 数量
+        pnl: 盈亏金额
+        hold_time: 持仓时间（秒）
+        note: 备注
+        db_config: 数据库配置
+    
+    Returns:
+        int: 记录ID
+    """
+    conn, db_kind = _get_connection(db_config)
+    try:
+        cursor = conn.cursor()
+        current_ts = int(time.time() * 1000)
+        
+        # 计算盈亏百分比
+        pnl_pct = 0.0
+        if entry_price > 0 and qty > 0:
+            cost = entry_price * qty
+            pnl_pct = (pnl / cost) * 100 if cost > 0 else 0
+        
+        if db_kind == "postgres":
+            cursor.execute('''
+            INSERT INTO trade_history (ts, symbol, pos_side, entry_price, exit_price, qty, pnl, pnl_pct, hold_time, note)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            ''', (current_ts, symbol, pos_side, entry_price, exit_price, qty, pnl, pnl_pct, hold_time, note))
+            record_id = cursor.fetchone()[0]
+        else:
+            cursor.execute('''
+            INSERT INTO trade_history (ts, symbol, pos_side, entry_price, exit_price, qty, pnl, pnl_pct, hold_time, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (current_ts, symbol, pos_side, entry_price, exit_price, qty, pnl, pnl_pct, hold_time, note))
+            record_id = cursor.lastrowid
+        
+        conn.commit()
+        return record_id
+    finally:
+        conn.close()
+
+
+def get_trade_stats(db_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """获取交易统计数据
+    
+    Returns:
+        dict: 包含 total_trades, win_count, loss_count, win_rate, total_pnl, max_drawdown
+    """
+    conn, db_kind = _get_connection(db_config)
+    try:
+        cursor = conn.cursor()
+        
+        # 获取所有交易记录
+        cursor.execute('SELECT pnl FROM trade_history ORDER BY ts')
+        rows = cursor.fetchall()
+        
+        if not rows:
+            return {
+                'total_trades': 0,
+                'win_count': 0,
+                'loss_count': 0,
+                'win_rate': 0.0,
+                'total_pnl': 0.0,
+                'max_drawdown': 0.0
+            }
+        
+        total_trades = len(rows)
+        win_count = sum(1 for row in rows if row[0] > 0)
+        loss_count = sum(1 for row in rows if row[0] < 0)
+        total_pnl = sum(row[0] for row in rows)
+        win_rate = (win_count / total_trades * 100) if total_trades > 0 else 0
+        
+        # 计算最大回撤
+        cumulative_pnl = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for row in rows:
+            cumulative_pnl += row[0]
+            if cumulative_pnl > peak:
+                peak = cumulative_pnl
+            drawdown = peak - cumulative_pnl
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+        
+        return {
+            'total_trades': total_trades,
+            'win_count': win_count,
+            'loss_count': loss_count,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'max_drawdown': max_drawdown
+        }
+    finally:
+        conn.close()
+
+
+def get_trade_history(limit: int = 50, db_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """获取交易历史记录
+    
+    Args:
+        limit: 数量限制
+        db_config: 数据库配置
+    
+    Returns:
+        list: 交易历史列表
+    """
+    conn, db_kind = _get_connection(db_config)
+    try:
+        cursor = conn.cursor()
+        
+        if db_kind == "postgres":
+            cursor.execute('SELECT * FROM trade_history ORDER BY ts DESC LIMIT %s', (limit,))
+        else:
+            cursor.execute('SELECT * FROM trade_history ORDER BY ts DESC LIMIT ?', (limit,))
+        
+        rows = cursor.fetchall()
+        trades = []
+        if rows:
+            columns = [col[0] for col in cursor.description]
+            for row in rows:
+                trades.append(dict(zip(columns, row)))
+        return trades
+    finally:
+        conn.close()
+
+
+def clear_trade_history(db_config: Optional[Dict[str, Any]] = None) -> int:
+    """清空交易历史记录
+    
+    Returns:
+        int: 删除的记录数
+    """
+    conn, db_kind = _get_connection(db_config)
+    try:
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM trade_history')
+        deleted_count = cursor.rowcount
+        conn.commit()
+        return deleted_count
     finally:
         conn.close()

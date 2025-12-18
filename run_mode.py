@@ -116,8 +116,8 @@ def is_live_mode(mode_str: Optional[str] = None) -> bool:
 
 # UI 显示映射
 RUN_MODE_DISPLAY = {
-    RunMode.LIVE: "💰 实盘",
-    RunMode.PAPER: "🛰️ 实盘测试"
+    RunMode.LIVE: "● 实盘",
+    RunMode.PAPER: "○ 测试"
 }
 
 # DB 存储映射（统一使用 'live' 和 'paper'）
@@ -138,7 +138,7 @@ DB_TO_RUN_MODE = {
 
 def run_mode_to_display(mode: RunMode) -> str:
     """将 RunMode 转换为 UI 显示文本"""
-    return RUN_MODE_DISPLAY.get(mode, "🛰️ 实盘测试")
+    return RUN_MODE_DISPLAY.get(mode, "○ 测试")
 
 
 def run_mode_to_db(mode: RunMode) -> str:

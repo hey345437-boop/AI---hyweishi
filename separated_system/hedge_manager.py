@@ -290,6 +290,25 @@ class HedgeManager:
                 except Exception as e:
                     logger.error(f"更新模拟余额失败: {e}")
             
+            # 🔥 记录交易历史（用于计算胜率等统计）
+            try:
+                entry_price = main_pos.get('entry_price', 0)
+                qty = main_pos.get('qty', 0)
+                created_at = main_pos.get('created_at', 0)
+                hold_time = int(time.time() * 1000 - created_at) // 1000 if created_at > 0 else 0
+                self.db.insert_trade_history(
+                    symbol=symbol,
+                    pos_side=main_pos.get('pos_side', 'long'),
+                    entry_price=entry_price,
+                    exit_price=current_price,
+                    qty=qty,
+                    pnl=pnl,
+                    hold_time=hold_time,
+                    note='主仓止盈'
+                )
+            except Exception as e:
+                logger.error(f"记录交易历史失败: {e}")
+            
             logger.info(f"已平主仓 {symbol} {main_pos.get('pos_side')} | PnL: ${pnl:.2f}")
         
         # 平所有对冲仓
@@ -331,6 +350,25 @@ class HedgeManager:
                     self.db.update_paper_balance(equity=new_equity, available=new_available)
                 except Exception as e:
                     logger.error(f"更新模拟余额失败: {e}")
+            
+            # 🔥 记录交易历史（用于计算胜率等统计）
+            try:
+                entry_price = hedge_pos.get('entry_price', 0)
+                qty = hedge_pos.get('qty', 0)
+                created_at = hedge_pos.get('created_at', 0)
+                hold_time = int(time.time() * 1000 - created_at) // 1000 if created_at > 0 else 0
+                self.db.insert_trade_history(
+                    symbol=symbol,
+                    pos_side=hedge_pos.get('pos_side', 'short'),
+                    entry_price=entry_price,
+                    exit_price=current_price,
+                    qty=qty,
+                    pnl=pnl,
+                    hold_time=hold_time,
+                    note='对冲仓止盈'
+                )
+            except Exception as e:
+                logger.error(f"记录交易历史失败: {e}")
             
             logger.info(f"已平对冲仓 {symbol} {hedge_pos.get('pos_side')} | PnL: ${pnl:.2f}")
         

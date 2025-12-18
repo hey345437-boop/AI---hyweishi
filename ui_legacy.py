@@ -50,11 +50,11 @@ try:
     RUN_MODE_DB_TO_UI['paper_on_real'] = RUN_MODE_DISPLAY[RunMode.PAPER]
 except ImportError:
     # 回退到硬编码值
-    RUN_MODE_UI = ["🛰️ 实盘测试", "💰 实盘"]
-    RUN_MODE_UI_TO_DB = {"🛰️ 实盘测试": "paper", "💰 实盘": "live"}
+    RUN_MODE_UI = ["○ 测试", "● 实盘"]
+    RUN_MODE_UI_TO_DB = {"○ 测试": "paper", "● 实盘": "live"}
     RUN_MODE_DB_TO_UI = {v: k for k, v in RUN_MODE_UI_TO_DB.items()}
-    RUN_MODE_DB_TO_UI['sim'] = "🛰️ 实盘测试"
-    RUN_MODE_DB_TO_UI['paper_on_real'] = "🛰️ 实盘测试"
+    RUN_MODE_DB_TO_UI['sim'] = "○ 测试"
+    RUN_MODE_DB_TO_UI['paper_on_real'] = "○ 测试"
 
 
 # ============ Market API 客户端 ============
@@ -692,9 +692,9 @@ def render_login(view_model, actions):
                         
                         # 转换run_mode为UI显示模式(与顶部定义一致)
                         run_mode_map = {
-                            "live": "💰 实盘",
-                            "paper": "🛰️ 实盘测试",  # paper模式对应实盘测试
-                            "sim": "🛰️ 实盘测试"  # 兼容旧的sim模式
+                            "live": "● 实盘",
+                            "paper": "○ 测试",  # paper模式对应测试
+                            "sim": "○ 测试"  # 兼容旧的sim模式
                         }
                         
                         # 设置session_state
@@ -702,7 +702,7 @@ def render_login(view_model, actions):
                         st.session_state.auto_symbols = bot_config.get("symbols", "").split(",") if bot_config.get("symbols") else []
                         st.session_state.open_positions = {}
                         st.session_state.hedge_positions = {}
-                        st.session_state.env_mode = run_mode_map.get(bot_config.get("run_mode", "sim"), "💰 实盘")
+                        st.session_state.env_mode = run_mode_map.get(bot_config.get("run_mode", "sim"), "● 实盘")
                         st.session_state.strategy_module = "strategy_v2"  # 🔥 默认趋势2
                         st.session_state.position_sizes = {
                             "primary": bot_config.get("position_size", 0.05), 
@@ -736,9 +736,9 @@ def _render_sidebar_balance_fragment(actions, view_model):
     只刷新余额显示，不影响其他组件
     """
     # 🔥 根据运行模式显示不同的余额
-    current_env_mode = st.session_state.get('env_mode', '💰 实盘')
+    current_env_mode = st.session_state.get('env_mode', '● 实盘')
     
-    if current_env_mode == "🛰️ 实盘测试":
+    if current_env_mode == "○ 测试":
         # 实盘测试模式: 从数据库读取模拟账户余额
         try:
             paper_balance = actions.get("get_paper_balance", lambda: {})()
@@ -779,16 +779,75 @@ def _render_sidebar_balance_fragment(actions, view_model):
 def render_sidebar(view_model, actions):
     """渲染侧边栏"""
     with st.sidebar:
-        # ============ 后端状态(放在最上方)============
+        # ============ 系统标题 - 何以为势 炫光字体 ============
+        st.markdown("""
+        <style>
+        @keyframes glow-pulse {
+            0%, 100% { text-shadow: 0 0 10px #667eea, 0 0 20px #667eea, 0 0 30px #764ba2, 0 0 40px #764ba2; }
+            50% { text-shadow: 0 0 20px #667eea, 0 0 30px #667eea, 0 0 40px #764ba2, 0 0 50px #764ba2, 0 0 60px #f093fb; }
+        }
+        .glow-title {
+            font-size: 22px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: glow-pulse 3s ease-in-out infinite;
+            letter-spacing: 2px;
+        }
+        </style>
+        <div style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px 8px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        ">
+            <div class="glow-title">何以为势</div>
+            <div style="color: #718096; font-size: 11px; margin-top: 4px; letter-spacing: 1px;">Quantitative Trading System</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # ============ 后端状态 ============
         engine_status = view_model.get("engine_status", {})
         runner_alive = engine_status.get("alive", 0) == 1
-        if runner_alive:
-            st.success("🟢 后端在线")
-        else:
-            st.error("🔴 后端离线")
+        status_color = "#48bb78" if runner_alive else "#f56565"
+        status_text = "🟢 后端在线" if runner_alive else "🔴 后端离线"
+        st.markdown(f"""
+        <div style="
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            margin-bottom: 15px;
+        ">
+            <div style="
+                width: 8px;
+                height: 8px;
+                background: {status_color};
+                border-radius: 50%;
+                margin-right: 10px;
+                box-shadow: 0 0 10px {status_color};
+            "></div>
+            <span style="color: {status_color}; font-size: 13px; font-weight: 500;">{status_text}</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # ============ 资产概览 ============
-        st.markdown("## 💎 资产看板")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 10px 16px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        ">
+            <span style="color: white; font-size: 16px; font-weight: 600;">✦ 资产看板</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # 🔥 使用 fragment 实现余额自动刷新
         _render_sidebar_balance_fragment(actions, view_model)
@@ -797,10 +856,20 @@ def render_sidebar(view_model, actions):
         if "strategy_module" not in st.session_state:
             st.session_state.strategy_module = "strategy"
         if "env_mode" not in st.session_state:
-            st.session_state.env_mode = "💰 实盘"  # 默认实盘
+            st.session_state.env_mode = "● 实盘"  # 默认实盘
         
         # 环境模式切换(session_state.env_mode 为 UI 缓存, DB 为权威)
-        st.markdown("### 🎛️ 运行模式")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 8px 14px;
+            border-radius: 8px;
+            margin: 20px 0 12px 0;
+            box-shadow: 0 4px 15px rgba(17, 153, 142, 0.3);
+        ">
+            <span style="color: white; font-size: 14px; font-weight: 600;">◈ 运行模式</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # P0修复: 实盘模式二次确认状态
         if "live_mode_confirm_pending" not in st.session_state:
@@ -850,7 +919,7 @@ def render_sidebar(view_model, actions):
             run_mode_db = RUN_MODE_UI_TO_DB.get(sel, 'paper')
             
             # P0修复: 切换到实盘模式需要二次确认
-            if run_mode_db == 'live' and st.session_state.env_mode != "💰 实盘":
+            if run_mode_db == 'live' and st.session_state.env_mode != "● 实盘":
                 st.session_state.live_mode_confirm_pending = True
                 st.session_state.pending_live_mode_sel = sel
                 return  # 不立即执行, 等待确认
@@ -860,7 +929,7 @@ def render_sidebar(view_model, actions):
 
         # selectbox 使用 key + on_change 回调
         st.selectbox(
-            "选择运行模式",
+            "",
             RUN_MODE_UI,
             index=RUN_MODE_UI.index(st.session_state.env_mode) if st.session_state.env_mode in RUN_MODE_UI else 0,
             key='env_mode_selector',
@@ -876,7 +945,7 @@ def render_sidebar(view_model, actions):
             col_confirm, col_cancel = st.columns(2)
             with col_confirm:
                 if st.button("✅ 确认切换到实盘", type="primary", width="stretch"):
-                    sel = st.session_state.get('pending_live_mode_sel', "💰 实盘")
+                    sel = st.session_state.get('pending_live_mode_sel', "● 实盘")
                     _execute_mode_change('live', sel)
                     st.session_state.live_mode_confirm_pending = False
                     st.success("已切换到实盘模式")
@@ -889,9 +958,9 @@ def render_sidebar(view_model, actions):
                     st.rerun()
         
         # P2-8修复: 明确说明运行模式
-        if st.session_state.env_mode == "🛰️ 实盘测试":
-            st.caption("📌 读取真实行情, 但不会真实下单")
-        elif st.session_state.env_mode == "💰 实盘":
+        if st.session_state.env_mode == "○ 测试":
+            st.caption("读取真实行情, 但不会真实下单")
+        elif st.session_state.env_mode == "● 实盘":
             st.caption("⚠️ 实盘模式: 所有交易将真实执行")
         
         # 显示 OKX_SANDBOX 环境变量状态(帮助用户理解配置)
@@ -899,7 +968,17 @@ def render_sidebar(view_model, actions):
         if okx_sandbox:
             st.warning("⚠️ 当前 OKX_SANDBOX=true, 使用 OKX 模拟盘 API(非真实资金)")
         
-        st.markdown("### 📐 策略切换")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 8px 14px;
+            border-radius: 8px;
+            margin: 20px 0 12px 0;
+            box-shadow: 0 4px 15px rgba(240, 147, 251, 0.3);
+        ">
+            <span style="color: white; font-size: 14px; font-weight: 600;">◇ 策略切换</span>
+        </div>
+        """, unsafe_allow_html=True)
         # 获取所有可用策略((display_name, strategy_id) 元组)
         strategy_options = view_model.get("strategy_options", [("默认策略", "strategy_default")])
         strategy_ids = [opt[1] for opt in strategy_options]  # 按顺序的 strategy_id 列表
@@ -945,7 +1024,7 @@ def render_sidebar(view_model, actions):
         
         # selectbox 使用稳定 strategy_id, 不用下拉索引
         selected_strategy_tuple = st.selectbox(
-            "选择策略模块",
+            "",
             strategy_options,
             index=current_idx,
             key='strategy_selectbox',
@@ -957,7 +1036,17 @@ def render_sidebar(view_model, actions):
             st.session_state.selected_strategy_id = selected_strategy_tuple[1]
         
         # ============ 🔥 双 Key API 配置面板 ============
-        st.markdown("### 🔑 API 密钥管理")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 8px 14px;
+            border-radius: 8px;
+            margin: 20px 0 12px 0;
+            box-shadow: 0 4px 15px rgba(250, 112, 154, 0.3);
+        ">
+            <span style="color: white; font-size: 14px; font-weight: 600;">⬡ API 密钥</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # 导入配置管理器
         try:
@@ -1144,7 +1233,17 @@ def render_sidebar(view_model, actions):
                     """)
         
         # 交易池配置
-        st.markdown("### 🤖 交易池")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 8px 14px;
+            border-radius: 8px;
+            margin: 20px 0 12px 0;
+            box-shadow: 0 4px 15px rgba(79, 172, 254, 0.3);
+        ">
+            <span style="color: white; font-size: 14px; font-weight: 600;">⬢ 交易池</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # 【A】修复: 使用 robust symbol 规范化函数
         from symbol_utils import normalize_symbol, parse_symbol_input
@@ -1155,7 +1254,7 @@ def render_sidebar(view_model, actions):
             st.session_state.auto_symbols = default_symbols
         
         # 动态交易池设置
-        st.caption("💡 支持输入: btc, BTCUSDT, BTC-USDT, BTC/USDT, BTC-USDT-SWAP 等格式")
+        st.caption("💡 输入币种：btc, eth, sol...")
         symbol_input = st.text_area(
             "交易对列表(每行一个)",
             value="\n".join(st.session_state.auto_symbols),
@@ -1186,7 +1285,17 @@ def render_sidebar(view_model, actions):
                 st.warning("⚠️ 交易池不能为空, 请输入有效的交易对")
         
         # 🔥 交易参数配置
-        st.markdown("### ⚙️ 交易参数")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 8px 14px;
+            border-radius: 8px;
+            margin: 20px 0 12px 0;
+            box-shadow: 0 4px 15px rgba(168, 237, 234, 0.3);
+        ">
+            <span style="color: white; font-size: 14px; font-weight: 600;">◎ 交易参数</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # 从数据库获取当前交易参数
         bot_config = actions.get("get_bot_config", lambda: {})()
@@ -1279,7 +1388,17 @@ def render_sidebar(view_model, actions):
             st.caption(f"当前: {exec_mode_short} | {new_leverage}x杠杆 | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}%")
         
         # ============ 🔥 数据源模式选择器 ============
-        st.markdown("### 📡 数据源模式")
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 8px 14px;
+            border-radius: 8px;
+            margin: 20px 0 12px 0;
+            box-shadow: 0 4px 15px rgba(137, 247, 254, 0.3);
+        ">
+            <span style="color: white; font-size: 14px; font-weight: 600;">◉ 数据源</span>
+        </div>
+        """, unsafe_allow_html=True)
         
         # 初始化数据源模式
         if "data_source_mode" not in st.session_state:
@@ -1287,8 +1406,8 @@ def render_sidebar(view_model, actions):
         
         # 数据源模式选项
         DATA_SOURCE_MODES = {
-            "REST": "🔄 REST 轮询 (推荐)",
-            "WebSocket": "⚡ WebSocket 极速"
+            "REST": "○ REST 轮询",
+            "WebSocket": "● WebSocket"
         }
         
         def _on_data_source_change():
@@ -1308,7 +1427,7 @@ def render_sidebar(view_model, actions):
         current_idx = mode_options.index(current_mode) if current_mode in mode_options else 0
         
         st.selectbox(
-            "策略引擎数据源",
+            "",
             mode_options,
             index=current_idx,
             key='data_source_selector',
@@ -1993,7 +2112,7 @@ def _render_dashboard_cards_fragment(view_model, actions):
     c1, c2, c3, c4 = st.columns(4)
     
     # session_state 获取 env_mode
-    env_mode = st.session_state.get('env_mode', view_model.get("env_mode", "💰 实盘"))
+    env_mode = st.session_state.get('env_mode', view_model.get("env_mode", "● 实盘"))
     trading_active = view_model.get("trading_active", False)
     open_positions = view_model.get("open_positions", {})
     
@@ -2014,24 +2133,43 @@ def _render_dashboard_cards_fragment(view_model, actions):
 
 def render_dashboard(view_model, actions):
     """渲染主仪表盘"""
-    # 页面样式已在theme_tiktok.css中定义
+    # 🔥 统一metric卡片样式
+    st.markdown("""
+    <style>
+    /* 统一所有metric卡片的样式 */
+    [data-testid="stMetric"] {
+        background: rgba(28, 31, 38, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        padding: 15px;
+    }
+    [data-testid="stMetric"] label {
+        color: rgba(255, 255, 255, 0.6) !important;
+        font-size: 12px !important;
+    }
+    [data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-size: 24px !important;
+        font-weight: 600 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     
     # 🔥 从 view_model 获取关键变量
     open_positions = view_model.get("open_positions", {})
-    env_mode = st.session_state.get('env_mode', view_model.get("env_mode", "💰 实盘"))
+    env_mode = st.session_state.get('env_mode', view_model.get("env_mode", "● 实盘"))
     
     # 主页面布局
     col_main, col_chat = st.columns([7, 3])
     
     with col_main:
         # 🔥 实盘监控卡片（使用 fragment 局部刷新）
-        st.subheader("📊 实盘监控")
+        st.markdown("#### ◈ 实盘监控")
         _render_dashboard_cards_fragment(view_model, actions)
         
         st.divider()
         
         # 【C】修复: 系统控制精简为 3 个按钮
-        st.subheader("🎮 系统控制")
+        st.markdown("#### ◎ 系统控制")
         
         # 🔥 从数据库读取真实的交易状态
         bot_config = actions.get("get_bot_config", lambda: {})()
@@ -2125,52 +2263,18 @@ def render_dashboard(view_model, actions):
                     st.session_state.flatten_confirm_pending = False
                     st.rerun()
         
-        st.caption("💡 交易模式通过侧边栏设置")
+        st.caption("交易模式通过侧边栏设置")
         
         st.divider()
         
-        # 情绪接口显示
-        st.subheader("😰 市场情绪")
-        with st.expander("情绪分析", expanded=False):
-            # 获取情绪数据
-            @st.cache_data(ttl=60)  # 60秒缓存, 避免频繁请求
-            def fetch_sentiment():
-                try:
-                    response = requests.get("https://api.alternative.me/fng/")  # 情绪API
-                    data = response.json()
-                    return data["data"][0]["value"], data["data"][0]["value_classification"]
-                except Exception as e:
-                    st.error(f"情绪API请求失败: {str(e)[:30]}...")  # 显示错误摘要
-                    return "----", "未知"  # 占位            
-            fear_value, fear_level = fetch_sentiment()
-            
-            # 显示恐惧与贪婪指数
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("恐惧与贪婪指数", fear_value)
-            with col2:
-                st.metric("情绪水平", fear_level)
-            
-            # 情绪解释
-            if fear_value != "----":
-                try:
-                    fear_num = int(fear_value)
-                    if fear_num <= 20:
-                        st.warning("市场处于极度恐惧状态, 可能是买入机会")
-                    elif fear_num >= 80:
-                        st.warning("市场处于极度贪婪状态, 可能是卖出机会")
-                    else:
-                        st.info("市场情绪较为中性")
-                except ValueError:
-                    pass
-            
-            # 情绪历史图表占位
-            st.caption("情绪历史数据加载..")
+        # 🔥 K线图展开窗口（使用独立 fragment，支持折叠状态检测）
+        st.markdown("#### ✦ K线图")
+        _render_kline_section_fragment(view_model, actions)
         
         st.divider()
         
         # 持仓分析
-        st.subheader("📈 持仓分析")
+        st.markdown("#### ⬢ 持仓分析")
         pos_stats_col1, pos_stats_col2 = st.columns([2, 1])
         
         with pos_stats_col1:
@@ -2188,9 +2292,9 @@ def render_dashboard(view_model, actions):
                             "币种": symbol,
                             "类型": "主仓",
                             "方向": pos.get("side", "LONG"),
-                            "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",  # 🔥 显示保证金
-                            "名义价值": f"${pos.get('size', 0):.2f}",  # 🔥 改名为名义价值
-                            "入场价": f"${pos.get('entry_price', 0):.8g}",  # 🔥 使用 .8g 格式，自动处理小数位
+                            "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",
+                            "名义价值": f"${pos.get('size', 0):.2f}",
+                            "入场价": f"${pos.get('entry_price', 0):.8g}",
                             "入场时间": pos.get("entry_time", "-"),
                             "浮盈": f"${pos.get('pnl', 0):+.2f}"
                         })
@@ -2203,9 +2307,9 @@ def render_dashboard(view_model, actions):
                                 "币种": symbol,
                                 "类型": f"对冲仓{idx+1}",
                                 "方向": pos.get("side", "SHORT"),
-                                "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",  # 🔥 显示保证金
-                                "名义价值": f"${pos.get('size', 0):.2f}",  # 🔥 改名为名义价值
-                                "入场价": f"${pos.get('entry_price', 0):.8g}",  # 🔥 使用 .8g 格式，自动处理小数位
+                                "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",
+                                "名义价值": f"${pos.get('size', 0):.2f}",
+                                "入场价": f"${pos.get('entry_price', 0):.8g}",
                                 "入场时间": pos.get("entry_time", "-"),
                                 "浮盈": f"${pos.get('pnl', 0):+.2f}"
                             })
@@ -2213,41 +2317,108 @@ def render_dashboard(view_model, actions):
                 # 显示持仓表格
                 if pos_data:
                     df_positions = pd.DataFrame(pos_data)
-                    st.dataframe(df_positions, width="stretch")
+                    st.dataframe(df_positions, use_container_width=True)
             else:
                 st.info("暂无持仓数据")
         
         st.divider()
         
-        # 模拟账户统计(如果是实盘测试模式)
-        if env_mode == "🛰实盘测试":
-            st.subheader("📊 模拟账户统计")
+        # 🔥 交易统计（测试模式显示）
+        if env_mode == "○ 测试":
+            st.markdown("#### ◉ 交易统计")
             
             try:
-                # 从view_model获取模拟账户数据
-                sim_stats = view_model.get("simulation_stats", {})
+                trade_stats = actions.get("get_trade_stats", lambda: {})()
+                paper_balance = actions.get("get_paper_balance", lambda: {})()
                 
-                if sim_stats:
-                    # 显示关键指标
-                    sim_col1, sim_col2, sim_col3, sim_col4 = st.columns(4)
-                    with sim_col1:
-                        st.metric("模拟净值", f"${sim_stats.get('current_equity', 0):.2f}", 
-                                 delta=f"+${sim_stats.get('current_equity', 0) - sim_stats.get('initial_balance', 0):.2f}")
-                    with sim_col2:
-                        st.metric("总收益率", f"{sim_stats.get('total_return', 0):+.2f}%")
-                    with sim_col3:
-                        st.metric("总交易", f"{sim_stats.get('total_trades', 0)}", 
-                                 delta=f"胜率 {sim_stats.get('win_rate', 0):.1f}%")
-                    with sim_col4:
-                        st.metric("最大回撤", f"{sim_stats.get('max_drawdown', 0):.2f}%")
+                current_equity = float(paper_balance.get('equity', 200) or 200) if paper_balance else 200
+                initial_balance = 200.0
+                total_return = ((current_equity - initial_balance) / initial_balance * 100) if initial_balance > 0 else 0
+                
+                stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                with stat_col1:
+                    st.metric("模拟净值", f"${current_equity:.2f}")
+                with stat_col2:
+                    total_trades = trade_stats.get('total_trades', 0) if trade_stats else 0
+                    win_rate = trade_stats.get('win_rate', 0) if trade_stats else 0
+                    st.metric("总交易", f"{total_trades}", delta=f"胜率 {win_rate:.1f}%")
+                with stat_col3:
+                    total_pnl = trade_stats.get('total_pnl', 0) if trade_stats else 0
+                    st.metric("总盈亏", f"${total_pnl:+.2f}")
+                with stat_col4:
+                    max_dd = trade_stats.get('max_drawdown', 0) if trade_stats else 0
+                    st.metric("最大回撤", f"${max_dd:.2f}")
+                
+                # 🔥 资金曲线图（可展开）
+                with st.expander("📈 资金曲线", expanded=False):
+                    trade_history = actions.get("get_trade_history", lambda limit=50: [])()
+                    if trade_history and len(trade_history) > 0:
+                        # 构建资金曲线数据
+                        equity_data = []
+                        cumulative_equity = 200.0  # 初始资金
+                        
+                        # 按时间排序（升序）
+                        sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
+                        
+                        # 添加初始点
+                        equity_data.append({'时间': '初始', '净值': cumulative_equity})
+                        
+                        for i, trade in enumerate(sorted_trades):
+                            pnl = float(trade.get('pnl', 0) or 0)
+                            cumulative_equity += pnl
+                            ts = trade.get('ts', 0)
+                            if ts > 0:
+                                from datetime import datetime
+                                time_str = datetime.fromtimestamp(ts / 1000).strftime('%m-%d %H:%M')
+                            else:
+                                time_str = f"交易{i+1}"
+                            equity_data.append({'时间': time_str, '净值': cumulative_equity})
+                        
+                        # 绘制折线图
+                        df_equity = pd.DataFrame(equity_data)
+                        st.line_chart(df_equity.set_index('时间')['净值'], use_container_width=True)
+                        
+                        # 显示交易明细
+                        st.caption(f"共 {len(sorted_trades)} 笔交易")
+                    else:
+                        st.info("暂无交易记录，完成首笔交易后将显示资金曲线")
+                        
             except Exception as e:
-                st.warning(f"模拟引擎未启动: {str(e)}")
+                st.info("暂无交易统计数据")
+            
+            st.divider()
         
-        st.divider()
-        
-        # 🔥 K线图展开窗口（使用独立 fragment，支持折叠状态检测）
-        st.subheader("📊 K线图分析")
-        _render_kline_section_fragment(view_model, actions)
+        # 情绪接口显示
+        st.markdown("#### ◇ 市场情绪")
+        with st.expander("情绪分析", expanded=False):
+            @st.cache_data(ttl=60)
+            def fetch_sentiment():
+                try:
+                    response = requests.get("https://api.alternative.me/fng/")
+                    data = response.json()
+                    return data["data"][0]["value"], data["data"][0]["value_classification"]
+                except Exception as e:
+                    st.error(f"情绪API请求失败: {str(e)[:30]}...")
+                    return "----", "未知"
+            fear_value, fear_level = fetch_sentiment()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("恐惧与贪婪指数", fear_value)
+            with col2:
+                st.metric("情绪水平", fear_level)
+            
+            if fear_value != "----":
+                try:
+                    fear_num = int(fear_value)
+                    if fear_num <= 20:
+                        st.warning("市场处于极度恐惧状态, 可能是买入机会")
+                    elif fear_num >= 80:
+                        st.warning("市场处于极度贪婪状态, 可能是卖出机会")
+                    else:
+                        st.info("市场情绪较为中性")
+                except ValueError:
+                    pass
 
 
 def render_main(view_model, actions):

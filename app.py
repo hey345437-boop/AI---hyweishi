@@ -63,7 +63,8 @@ try:
         get_engine_status, get_control_flags, 
         get_bot_config, update_bot_config, set_control_flags,
         init_db,
-        get_paper_balance, get_paper_positions, get_hedge_positions
+        get_paper_balance, get_paper_positions, get_hedge_positions,
+        get_trade_stats, get_trade_history  # 🔥 交易统计
     )
     from db_bridge import get_bootstrap_state, get_credentials_status, verify_credentials_and_snapshot
 except ImportError as e:
@@ -333,7 +334,9 @@ def main():
         "get_bootstrap_state": get_bootstrap_state,
         "get_credentials_status": get_credentials_status,
         "verify_credentials_and_snapshot": verify_credentials_and_snapshot,
-        "get_paper_balance": get_paper_balance
+        "get_paper_balance": get_paper_balance,
+        "get_trade_stats": get_trade_stats,  # 🔥 交易统计
+        "get_trade_history": get_trade_history  # 🔥 交易历史（资金曲线）
     }
     
     # 调用UI模块

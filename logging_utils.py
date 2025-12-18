@@ -204,10 +204,7 @@ def render_scan_block(
     if risk_status:
         lines.append(f"   🛡️ 使用缓存的预风控结果: {risk_status}")
     
-    if equity > 0:
-        # 🔥 使用 total_margin（已用保证金）而非 total_base_used（名义价值）
-        display_margin = total_margin if total_margin > 0 else total_base_used
-        lines.append(f"   💰 账户权益: ${equity:.2f} | 已用保证金: ${display_margin:.2f} | 剩余额度: ${remaining_base:.2f}")
+    # 🔥 账户权益已在30秒风控检查时打印，0秒扫描不再重复打印
     
     # 信号（只有发现信号时才显示）
     for sig in signals:

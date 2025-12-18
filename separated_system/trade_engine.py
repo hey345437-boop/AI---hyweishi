@@ -109,7 +109,9 @@ from db_bridge import (
     delete_hedge_positions_by_symbol, count_hedge_positions,
     get_trading_params,
     # P2修复: 信号缓存持久化
-    get_signal_cache, set_signal_cache, load_all_signal_cache, clear_signal_cache_db
+    get_signal_cache, set_signal_cache, load_all_signal_cache, clear_signal_cache_db,
+    # 🔥 交易历史记录
+    insert_trade_history
 )
 from logging_utils import setup_logger, get_logger, render_scan_block, render_idle_block, render_risk_check
 from exchange_adapters.factory import ExchangeAdapterFactory
@@ -1475,18 +1477,61 @@ def main():
                                     logger.debug(f"{symbol} 紧急平仓失败: {e}")
                     else:
                         # 🔥 模拟模式：从数据库获取模拟持仓并清除
+                        # 先获取当前价格用于计算盈亏
+                        flatten_tickers = {}
+                        if provider:
+                            try:
+                                flatten_tickers = provider.fetch_tickers(list(TRADE_SYMBOLS.keys()))
+                            except Exception:
+                                pass
+                        
+                        total_pnl = 0.0
+                        total_margin_released = 0.0
+                        
                         paper_positions = get_paper_positions()
                         if paper_positions:
-                            # 🔥 修复：get_paper_positions() 返回字典 {key: pos_data}
                             for pos_key, pos in paper_positions.items():
                                 symbol = pos.get('symbol')
                                 pos_side = pos.get('pos_side')
-                                qty = pos.get('qty', 0)
-                                if qty > 0:
+                                qty = float(pos.get('qty', 0) or 0)
+                                entry_price = float(pos.get('entry_price', 0) or 0)
+                                
+                                if qty > 0 and entry_price > 0:
                                     try:
+                                        # 获取当前价格
+                                        current_price = entry_price
+                                        if symbol in flatten_tickers:
+                                            current_price = float(flatten_tickers[symbol].get('last', entry_price) or entry_price)
+                                        
+                                        # 计算盈亏
+                                        if pos_side == 'long':
+                                            pnl = (current_price - entry_price) * qty
+                                        else:
+                                            pnl = (entry_price - current_price) * qty
+                                        
+                                        total_pnl += pnl
+                                        margin = (qty * entry_price) / max_lev
+                                        total_margin_released += margin
+                                        
+                                        # 记录交易历史
+                                        try:
+                                            insert_trade_history(
+                                                symbol=symbol,
+                                                pos_side=pos_side,
+                                                entry_price=entry_price,
+                                                exit_price=current_price,
+                                                qty=qty,
+                                                pnl=pnl,
+                                                hold_time=0,
+                                                note='紧急平仓'
+                                            )
+                                        except Exception as e:
+                                            logger.error(f"记录交易历史失败: {e}")
+                                        
+                                        # 删除持仓
                                         delete_paper_position(symbol, pos_side)
-                                        print(f"   ✅ 模拟平仓 {symbol} {pos_side} 数量: {qty}")
-                                        logger.debug(f"模拟平仓成功 {symbol} {pos_side} 数量: {qty}")
+                                        print(f"   ✅ 模拟平仓 {symbol} {pos_side} | 数量: {qty:.4f} | PnL: ${pnl:+.2f}")
+                                        logger.debug(f"模拟平仓成功 {symbol} {pos_side} 数量: {qty} PnL: {pnl}")
                                     except Exception as e:
                                         print(f"   ❌ 模拟平仓失败 {symbol}: {e}")
                                         logger.error(f"模拟平仓失败 {symbol}: {e}")
@@ -1500,17 +1545,74 @@ def main():
                                 hedge_id = hedge_pos.get('id')
                                 symbol = hedge_pos.get('symbol')
                                 pos_side = hedge_pos.get('pos_side')
-                                qty = hedge_pos.get('qty', 0)
-                                if hedge_id and qty > 0:
+                                qty = float(hedge_pos.get('qty', 0) or 0)
+                                entry_price = float(hedge_pos.get('entry_price', 0) or 0)
+                                
+                                if hedge_id and qty > 0 and entry_price > 0:
                                     try:
+                                        # 获取当前价格
+                                        current_price = entry_price
+                                        if symbol in flatten_tickers:
+                                            current_price = float(flatten_tickers[symbol].get('last', entry_price) or entry_price)
+                                        
+                                        # 计算盈亏
+                                        if pos_side == 'long':
+                                            pnl = (current_price - entry_price) * qty
+                                        else:
+                                            pnl = (entry_price - current_price) * qty
+                                        
+                                        total_pnl += pnl
+                                        margin = (qty * entry_price) / max_lev
+                                        total_margin_released += margin
+                                        
+                                        # 记录交易历史
+                                        try:
+                                            insert_trade_history(
+                                                symbol=symbol,
+                                                pos_side=pos_side,
+                                                entry_price=entry_price,
+                                                exit_price=current_price,
+                                                qty=qty,
+                                                pnl=pnl,
+                                                hold_time=0,
+                                                note='紧急平仓-对冲'
+                                            )
+                                        except Exception as e:
+                                            logger.error(f"记录交易历史失败: {e}")
+                                        
+                                        # 删除持仓
                                         delete_hedge_position(hedge_id)
-                                        print(f"   ✅ 模拟平对冲仓 {symbol} {pos_side} 数量: {qty}")
-                                        logger.debug(f"模拟平对冲仓成功 {symbol} {pos_side} 数量: {qty}")
+                                        print(f"   ✅ 模拟平对冲仓 {symbol} {pos_side} | 数量: {qty:.4f} | PnL: ${pnl:+.2f}")
+                                        logger.debug(f"模拟平对冲仓成功 {symbol} {pos_side} 数量: {qty} PnL: {pnl}")
                                     except Exception as e:
                                         print(f"   ❌ 模拟平对冲仓失败 {symbol}: {e}")
                                         logger.error(f"模拟平对冲仓失败 {symbol}: {e}")
                         else:
                             print(f"   ℹ️ 无对冲仓需要平仓")
+                        
+                        # 🔥 更新账户余额（释放保证金 + 盈亏）
+                        if total_margin_released > 0 or total_pnl != 0:
+                            try:
+                                paper_bal = get_paper_balance()
+                                current_equity = float(paper_bal.get('equity', 200) or 200)
+                                current_available = float(paper_bal.get('available', 200) or 200)
+                                wallet_balance = float(paper_bal.get('wallet_balance', 200) or 200)
+                                
+                                # 更新余额
+                                new_wallet = wallet_balance + total_pnl
+                                new_equity = new_wallet  # 平仓后无持仓，equity = wallet
+                                new_available = new_wallet
+                                
+                                update_paper_balance(
+                                    wallet_balance=new_wallet,
+                                    equity=new_equity,
+                                    available=new_available,
+                                    unrealized_pnl=0.0,
+                                    used_margin=0.0
+                                )
+                                print(f"   💰 账户更新: 释放保证金=${total_margin_released:.2f} | 总PnL=${total_pnl:+.2f} | 新净值=${new_equity:.2f}")
+                            except Exception as e:
+                                logger.error(f"更新账户余额失败: {e}")
                 except Exception as e:
                     logger.error(f"执行紧急平仓操作失败: {e}")
                     update_engine_status(last_error=str(e))
@@ -1654,34 +1756,8 @@ def main():
             # 🔥 DEBUG: 打印价格获取耗时
             print(f"   ⏱️ [DEBUG] 价格获取耗时: {price_fetch_time:.2f}s (批量模式)")
             
-            # 🔥 Mark-to-Market: 使用实时价格更新模拟持仓的浮动盈亏
-            # 注意：MTM 详细日志已在 balance_syncer（第30秒）打印，这里只更新缓存
-            mtm_start = time.perf_counter()
-            if run_mode in ('paper', 'sim', 'paper_on_real') and tickers:
-                try:
-                    mtm_result = mark_to_market_paper_positions(tickers, leverage=max_lev)
-                    if mtm_result['positions_updated'] > 0:
-                        # 🔥 更新 preflight_cache（不打印，避免重复）
-                        _mtm_equity = mtm_result['new_equity']
-                        _mtm_used_margin = mtm_result['total_used_margin']
-                        _mtm_notional = mtm_result['total_notional']
-                        _max_allowed = _mtm_equity * 0.10
-                        _can_open = _mtm_used_margin < _max_allowed
-                        _remaining = max(0, _max_allowed - _mtm_used_margin)
-                        
-                        preflight_cache.update(
-                            _can_open, _remaining, _mtm_equity,
-                            "OK" if _can_open else f"已用保证金超限 ({_mtm_used_margin:.2f}/{_max_allowed:.2f})",
-                            total_notional=_mtm_notional, total_margin=_mtm_used_margin
-                        )
-                        
-                        # 🔥 重新获取 preflight_status 以使用最新值
-                        preflight_status = preflight_cache.get_status()
-                        scan_risk_status = "可开新主仓" if preflight_status['can_open_new'] else "仅允许对冲仓"
-                except Exception as e:
-                    logger.warning(f"[MTM] 更新失败: {e}")
-            mtm_cost = time.perf_counter() - mtm_start
-            print(f"   ⏱️ [DEBUG] MTM更新耗时: {mtm_cost:.2f}s")
+            # 🔥 MTM 已在 balance_syncer（第30秒）执行，0秒扫描直接使用缓存的风控结果
+            # 不再重复执行 MTM，避免权益数据不一致
             
             # 🔥 收线确认模式：计算上一分钟的K线时间戳
             # 例如：10:06:00 触发 -> 期望的已收线K线时间戳为 10:05:00.000
