@@ -2134,6 +2134,82 @@ def _render_dashboard_cards_fragment(view_model, actions):
     with c4: st.metric("模式", env_mode)
 
 
+@st.fragment(run_every=5)
+def _render_position_analysis_fragment(view_model, actions):
+    """
+    🔥 持仓分析 Fragment - 每5秒自动刷新
+    """
+    # 实时获取持仓数据
+    open_positions = actions.get("get_open_positions", lambda: {})()
+    hedge_positions = actions.get("get_hedge_positions", lambda: {})()
+    
+    has_positions = open_positions or hedge_positions
+    
+    if has_positions:
+        pos_data = []
+        
+        # 主仓数据
+        for symbol, pos in open_positions.items():
+            if pos.get("size", 0) > 0:
+                pos_data.append({
+                    "币种": symbol,
+                    "类型": "主仓",
+                    "方向": pos.get("side", "LONG"),
+                    "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",
+                    "名义价值": f"${pos.get('size', 0):.2f}",
+                    "入场价": f"${pos.get('entry_price', 0):.8g}",
+                    "浮盈": f"${pos.get('pnl', 0):+.2f}"
+                })
+        
+        # 对冲仓数据
+        for symbol, hedge_list in hedge_positions.items():
+            for idx, pos in enumerate(hedge_list):
+                if pos.get("size", 0) > 0:
+                    pos_data.append({
+                        "币种": symbol,
+                        "类型": f"对冲仓{idx+1}",
+                        "方向": pos.get("side", "SHORT"),
+                        "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",
+                        "名义价值": f"${pos.get('size', 0):.2f}",
+                        "入场价": f"${pos.get('entry_price', 0):.8g}",
+                        "浮盈": f"${pos.get('pnl', 0):+.2f}"
+                    })
+        
+        if pos_data:
+            df_positions = pd.DataFrame(pos_data)
+            st.dataframe(df_positions, use_container_width=True, hide_index=True)
+    else:
+        st.info("暂无持仓数据")
+
+
+@st.fragment(run_every=5)
+def _render_trade_stats_fragment(view_model, actions):
+    """
+    🔥 交易统计 Fragment - 每5秒自动刷新
+    """
+    try:
+        trade_stats = actions.get("get_trade_stats", lambda: {})()
+        paper_balance = actions.get("get_paper_balance", lambda: {})()
+        
+        current_equity = float(paper_balance.get('equity', 200) or 200) if paper_balance else 200
+        
+        stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+        with stat_col1:
+            st.metric("模拟净值", f"${current_equity:.2f}")
+        with stat_col2:
+            total_trades = trade_stats.get('total_trades', 0) if trade_stats else 0
+            win_rate = trade_stats.get('win_rate', 0) if trade_stats else 0
+            st.metric("总交易", f"{total_trades}", delta=f"胜率 {win_rate:.1f}%")
+        with stat_col3:
+            total_pnl = trade_stats.get('total_pnl', 0) if trade_stats else 0
+            st.metric("总盈亏", f"${total_pnl:+.2f}")
+        with stat_col4:
+            max_dd = trade_stats.get('max_drawdown', 0) if trade_stats else 0
+            st.metric("最大回撤", f"${max_dd:.2f}")
+    except Exception as e:
+        st.info("暂无交易统计数据")
+
+
 def render_dashboard(view_model, actions):
     """渲染主仪表盘"""
     # 🔥 统一metric卡片样式
@@ -2276,118 +2352,42 @@ def render_dashboard(view_model, actions):
         
         st.divider()
         
-        # 持仓分析
+        # 持仓分析（使用 fragment 局部刷新）
         st.markdown("#### ⬢ 持仓分析")
-        pos_stats_col1, pos_stats_col2 = st.columns([2, 1])
-        
-        with pos_stats_col1:
-            # 持仓详细分析(包含主仓和对冲仓)
-            has_positions = open_positions or view_model.get("hedge_positions", {})
-            
-            if has_positions:
-                # 构建持仓数据
-                pos_data = []
-                
-                # 主仓数据
-                for symbol, pos in open_positions.items():
-                    if pos.get("size", 0) > 0:
-                        pos_data.append({
-                            "币种": symbol,
-                            "类型": "主仓",
-                            "方向": pos.get("side", "LONG"),
-                            "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",
-                            "名义价值": f"${pos.get('size', 0):.2f}",
-                            "入场价": f"${pos.get('entry_price', 0):.8g}",
-                            "入场时间": pos.get("entry_time", "-"),
-                            "浮盈": f"${pos.get('pnl', 0):+.2f}"
-                        })
-                
-                # 对冲仓数据
-                for symbol, hedge_list in view_model.get("hedge_positions", {}).items():
-                    for idx, pos in enumerate(hedge_list):
-                        if pos.get("size", 0) > 0:
-                            pos_data.append({
-                                "币种": symbol,
-                                "类型": f"对冲仓{idx+1}",
-                                "方向": pos.get("side", "SHORT"),
-                                "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",
-                                "名义价值": f"${pos.get('size', 0):.2f}",
-                                "入场价": f"${pos.get('entry_price', 0):.8g}",
-                                "入场时间": pos.get("entry_time", "-"),
-                                "浮盈": f"${pos.get('pnl', 0):+.2f}"
-                            })
-                
-                # 显示持仓表格
-                if pos_data:
-                    df_positions = pd.DataFrame(pos_data)
-                    st.dataframe(df_positions, use_container_width=True)
-            else:
-                st.info("暂无持仓数据")
+        _render_position_analysis_fragment(view_model, actions)
         
         st.divider()
         
-        # 🔥 交易统计（测试模式显示）
+        # 🔥 交易统计（测试模式显示，使用 fragment 局部刷新）
         if env_mode == "○ 测试":
             st.markdown("#### ◉ 交易统计")
+            _render_trade_stats_fragment(view_model, actions)
             
-            try:
-                trade_stats = actions.get("get_trade_stats", lambda: {})()
-                paper_balance = actions.get("get_paper_balance", lambda: {})()
-                
-                current_equity = float(paper_balance.get('equity', 200) or 200) if paper_balance else 200
-                initial_balance = 200.0
-                total_return = ((current_equity - initial_balance) / initial_balance * 100) if initial_balance > 0 else 0
-                
-                stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-                with stat_col1:
-                    st.metric("模拟净值", f"${current_equity:.2f}")
-                with stat_col2:
-                    total_trades = trade_stats.get('total_trades', 0) if trade_stats else 0
-                    win_rate = trade_stats.get('win_rate', 0) if trade_stats else 0
-                    st.metric("总交易", f"{total_trades}", delta=f"胜率 {win_rate:.1f}%")
-                with stat_col3:
-                    total_pnl = trade_stats.get('total_pnl', 0) if trade_stats else 0
-                    st.metric("总盈亏", f"${total_pnl:+.2f}")
-                with stat_col4:
-                    max_dd = trade_stats.get('max_drawdown', 0) if trade_stats else 0
-                    st.metric("最大回撤", f"${max_dd:.2f}")
-                
-                # 🔥 资金曲线图（可展开）
-                with st.expander("📈 资金曲线", expanded=False):
-                    trade_history = actions.get("get_trade_history", lambda limit=50: [])()
-                    if trade_history and len(trade_history) > 0:
-                        # 构建资金曲线数据
-                        equity_data = []
-                        cumulative_equity = 200.0  # 初始资金
-                        
-                        # 按时间排序（升序）
-                        sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
-                        
-                        # 添加初始点
-                        equity_data.append({'时间': '初始', '净值': cumulative_equity})
-                        
-                        for i, trade in enumerate(sorted_trades):
-                            pnl = float(trade.get('pnl', 0) or 0)
-                            cumulative_equity += pnl
-                            ts = trade.get('ts', 0)
-                            if ts > 0:
-                                from datetime import datetime
-                                time_str = datetime.fromtimestamp(ts / 1000).strftime('%m-%d %H:%M')
-                            else:
-                                time_str = f"交易{i+1}"
-                            equity_data.append({'时间': time_str, '净值': cumulative_equity})
-                        
-                        # 绘制折线图
-                        df_equity = pd.DataFrame(equity_data)
-                        st.line_chart(df_equity.set_index('时间')['净值'], use_container_width=True)
-                        
-                        # 显示交易明细
-                        st.caption(f"共 {len(sorted_trades)} 笔交易")
-                    else:
-                        st.info("暂无交易记录，完成首笔交易后将显示资金曲线")
-                        
-            except Exception as e:
-                st.info("暂无交易统计数据")
+            # 🔥 资金曲线图（可展开，不需要实时刷新）
+            with st.expander("📈 资金曲线", expanded=False):
+                trade_history = actions.get("get_trade_history", lambda limit=50: [])()
+                if trade_history and len(trade_history) > 0:
+                    equity_data = []
+                    cumulative_equity = 200.0
+                    sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
+                    equity_data.append({'时间': '初始', '净值': cumulative_equity})
+                    
+                    for i, trade in enumerate(sorted_trades):
+                        pnl = float(trade.get('pnl', 0) or 0)
+                        cumulative_equity += pnl
+                        ts = trade.get('ts', 0)
+                        if ts > 0:
+                            from datetime import datetime
+                            time_str = datetime.fromtimestamp(ts / 1000).strftime('%m-%d %H:%M')
+                        else:
+                            time_str = f"交易{i+1}"
+                        equity_data.append({'时间': time_str, '净值': cumulative_equity})
+                    
+                    df_equity = pd.DataFrame(equity_data)
+                    st.line_chart(df_equity.set_index('时间')['净值'], use_container_width=True)
+                    st.caption(f"共 {len(sorted_trades)} 笔交易")
+                else:
+                    st.info("暂无交易记录，完成首笔交易后将显示资金曲线")
             
             st.divider()
         

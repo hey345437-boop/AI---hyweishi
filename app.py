@@ -321,6 +321,74 @@ def main():
             
             view_model["hedge_positions"] = hedge_positions_dict
     
+    # 🔥 实时获取持仓数据的函数（用于 fragment 刷新）
+    def get_open_positions_formatted():
+        """获取格式化的主仓数据"""
+        paper_positions = get_paper_positions()
+        if not paper_positions:
+            return {}
+        
+        open_positions_dict = {}
+        positions_by_symbol = {}
+        
+        # 按 symbol 分组
+        if isinstance(paper_positions, dict):
+            for pos_key, pos in paper_positions.items():
+                if isinstance(pos, dict):
+                    symbol = pos.get("symbol", pos_key.split("_")[0] if "_" in pos_key else pos_key)
+                    if symbol not in positions_by_symbol:
+                        positions_by_symbol[symbol] = []
+                    positions_by_symbol[symbol].append(pos)
+        
+        # 构建仓位数据
+        for symbol, positions in positions_by_symbol.items():
+            if positions:
+                pos = positions[0]  # 取第一个作为主仓
+                qty = float(pos.get("qty", 0) or 0)
+                entry_price = float(pos.get("entry_price", 0) or 0)
+                unrealized_pnl = float(pos.get("unrealized_pnl", 0) or 0)
+                notional = qty * entry_price
+                open_positions_dict[symbol] = {
+                    "side": pos.get("pos_side", "long").upper(),
+                    "size": notional,
+                    "margin": notional / 20,
+                    "entry_price": entry_price,
+                    "pnl": unrealized_pnl
+                }
+        
+        return open_positions_dict
+    
+    def get_hedge_positions_formatted():
+        """获取格式化的对冲仓数据"""
+        hedge_positions_raw = get_hedge_positions()
+        if not hedge_positions_raw:
+            return {}
+        
+        hedge_positions_dict = {}
+        for hedge_pos in hedge_positions_raw:
+            symbol = hedge_pos.get("symbol", "")
+            if not symbol:
+                continue
+            
+            qty = float(hedge_pos.get("qty", 0) or 0)
+            entry_price = float(hedge_pos.get("entry_price", 0) or 0)
+            unrealized_pnl = float(hedge_pos.get("unrealized_pnl", 0) or 0)
+            notional = qty * entry_price
+            
+            hedge_data = {
+                "side": hedge_pos.get("pos_side", "short").upper(),
+                "size": notional,
+                "margin": notional / 20,
+                "entry_price": entry_price,
+                "pnl": unrealized_pnl
+            }
+            
+            if symbol not in hedge_positions_dict:
+                hedge_positions_dict[symbol] = []
+            hedge_positions_dict[symbol].append(hedge_data)
+        
+        return hedge_positions_dict
+    
     # 准备actions
     actions = {
         "get_env_config": get_env_config,
@@ -336,7 +404,9 @@ def main():
         "verify_credentials_and_snapshot": verify_credentials_and_snapshot,
         "get_paper_balance": get_paper_balance,
         "get_trade_stats": get_trade_stats,  # 🔥 交易统计
-        "get_trade_history": get_trade_history  # 🔥 交易历史（资金曲线）
+        "get_trade_history": get_trade_history,  # 🔥 交易历史（资金曲线）
+        "get_open_positions": get_open_positions_formatted,  # 🔥 实时持仓
+        "get_hedge_positions": get_hedge_positions_formatted  # 🔥 实时对冲仓
     }
     
     # 调用UI模块
