@@ -14,6 +14,7 @@ import json
 import time
 import threading
 import logging
+import queue
 from typing import Dict, List, Callable, Optional, Any
 from collections import defaultdict
 from datetime import datetime
@@ -31,19 +32,21 @@ except ImportError:
 
 class OKXWebSocketClient:
     """
-    OKX WebSocket 客户端
+    OKX WebSocket 客户端 (Production-Ready Refactored Version)
     
     功能：
     - 订阅 K线数据 (candle)
     - 订阅实时行情 (ticker)
-    - 自动重连
-    - 心跳保活
+    - 自动重连（指数退避）
+    - 内置心跳保活
+    
+    线程安全机制：
+    - ws_lock: 保护 WebSocket 对象的并发访问（send/close）
+    - msg_queue: 生产者-消费者模式，解耦网络线程与消息处理
+    - stop_event: 优雅关闭信号
     """
     
     # OKX WebSocket 地址
-    # 🔥 K线数据使用 Business 端点，不是 Public 端点
-    # Public 端点用于: tickers, trades, books 等
-    # Business 端点用于: candle (K线), mark-price-candle 等
     WS_BUSINESS_URL = "wss://ws.okx.com:8443/ws/v5/business"
     WS_BUSINESS_URL_AWS = "wss://wsaws.okx.com:8443/ws/v5/business"
     WS_PUBLIC_URL = "wss://ws.okx.com:8443/ws/v5/public"
@@ -64,10 +67,19 @@ class OKXWebSocketClient:
         self.ws: Optional[websocket.WebSocketApp] = None
         self.ws_thread: Optional[threading.Thread] = None
         
+        # ========== 线程安全机制 ==========
+        # [Fix #1] WebSocket 锁：保护 ws.send() / ws.close() 的并发访问
+        self.ws_lock = threading.Lock()
+        
+        # [Fix #2] 消息队列：生产者-消费者模式，解耦网络 I/O 与业务处理
+        self.msg_queue: queue.Queue = queue.Queue(maxsize=10000)
+        self.queue_worker_thread: Optional[threading.Thread] = None
+        
+        # [Fix #5] 停止事件：优雅关闭信号
+        self.stop_event = threading.Event()
+        
         # 连接状态
         self.connected = False
-        self.reconnecting = False
-        self.should_stop = False
         
         # 订阅管理
         self.subscriptions: Dict[str, Dict] = {}  # {channel_key: subscription_info}
@@ -80,18 +92,18 @@ class OKXWebSocketClient:
         # 行情数据缓存
         self.ticker_cache: Dict[str, Dict] = {}  # {inst_id: ticker_data}
         
-        # 心跳
-        self.last_pong_time = 0
-        self.heartbeat_thread: Optional[threading.Thread] = None
-        
-        # 重连配置
-        self.reconnect_delay = 5  # 重连延迟（秒）
-        self.max_reconnect_attempts = 10
+        # [Fix #3] 重连配置（指数退避）
+        self.base_reconnect_delay = 1  # 初始重连延迟（秒）
+        self.max_reconnect_delay = 60  # 最大重连延迟（秒）
         self.reconnect_attempts = 0
     
     def start(self) -> bool:
         """
         启动 WebSocket 连接
+        
+        启动流程：
+        1. 启动消息队列消费者线程
+        2. 启动 WebSocket 连接线程（含自动重连循环）
         
         Returns:
             是否启动成功
@@ -100,20 +112,20 @@ class OKXWebSocketClient:
             logger.info("[WS] 已连接，无需重复启动")
             return True
         
-        self.should_stop = False
+        self.stop_event.clear()
         
         try:
-            self.ws = websocket.WebSocketApp(
-                self.ws_url,
-                on_open=self._on_open,
-                on_message=self._on_message,
-                on_error=self._on_error,
-                on_close=self._on_close
+            # [Fix #2] 启动消息队列消费者线程
+            self.queue_worker_thread = threading.Thread(
+                target=self._process_queue_loop,
+                daemon=True,
+                name="WS-QueueWorker"
             )
+            self.queue_worker_thread.start()
             
-            # 在后台线程运行
+            # 启动 WebSocket 连接线程
             self.ws_thread = threading.Thread(
-                target=self._run_forever,
+                target=self._connection_loop,
                 daemon=True,
                 name="OKX-WebSocket"
             )
@@ -134,89 +146,168 @@ class OKXWebSocketClient:
             return False
     
     def stop(self):
-        """停止 WebSocket 连接"""
-        self.should_stop = True
+        """
+        [Fix #5] 优雅停止 WebSocket 连接
         
-        if self.ws:
-            try:
-                self.ws.close()
-            except Exception:
-                pass
+        停止流程：
+        1. 设置停止事件信号
+        2. 安全关闭 WebSocket（吞掉异常）
+        3. 等待工作线程结束
+        """
+        logger.info("[WS] 正在停止...")
+        self.stop_event.set()
+        
+        # 安全关闭 WebSocket
+        with self.ws_lock:
+            if self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass  # 吞掉关闭时的异常
         
         self.connected = False
+        
+        # 等待线程结束
+        if self.ws_thread and self.ws_thread.is_alive():
+            self.ws_thread.join(timeout=5)
+        if self.queue_worker_thread and self.queue_worker_thread.is_alive():
+            # 放入哨兵值唤醒队列消费者
+            self.msg_queue.put(None)
+            self.queue_worker_thread.join(timeout=5)
+        
         logger.info("[WS] 已停止")
     
-    def _run_forever(self):
-        """WebSocket 运行循环"""
-        while not self.should_stop:
+    def _connection_loop(self):
+        """
+        [Fix #3] WebSocket 连接主循环（带指数退避重连）
+        
+        模式：While-True-Try-Except
+        - 连接断开后自动重连
+        - 使用指数退避算法：1s, 2s, 4s, 8s... 最大 60s
+        """
+        while not self.stop_event.is_set():
             try:
+                # 创建新的 WebSocket 实例
+                self.ws = websocket.WebSocketApp(
+                    self.ws_url,
+                    on_open=self._on_open,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close
+                )
+                
+                # [Fix #4] 使用内置心跳，移除自定义心跳线程
+                # ping_interval: 每 25 秒自动发送 Ping
+                # ping_timeout: 10 秒内未收到 Pong 则断开
                 self.ws.run_forever(
                     ping_interval=25,
                     ping_timeout=10
                 )
+                
             except Exception as e:
                 logger.error(f"[WS] 运行异常: {e}")
             
-            if not self.should_stop:
-                self._handle_reconnect()
-    
-    def _handle_reconnect(self):
-        """处理重连"""
-        if self.reconnecting or self.should_stop:
-            return
+            # 连接断开，准备重连
+            self.connected = False
+            
+            if self.stop_event.is_set():
+                break
+            
+            # [Fix #3] 指数退避重连
+            self.reconnect_attempts += 1
+            delay = min(
+                self.base_reconnect_delay * (2 ** (self.reconnect_attempts - 1)),
+                self.max_reconnect_delay
+            )
+            logger.info(f"[WS] 将在 {delay:.1f}s 后重连 (第 {self.reconnect_attempts} 次)")
+            
+            # 可中断的等待
+            if self.stop_event.wait(timeout=delay):
+                break  # 收到停止信号，退出循环
         
-        self.reconnecting = True
-        self.connected = False
-        self.reconnect_attempts += 1
-        
-        if self.reconnect_attempts > self.max_reconnect_attempts:
-            logger.error(f"[WS] 重连次数超限 ({self.max_reconnect_attempts})，停止重连")
-            self.should_stop = True
-            self.reconnecting = False
-            return
-        
-        delay = min(self.reconnect_delay * self.reconnect_attempts, 60)
-        logger.info(f"[WS] 将在 {delay}s 后重连 (第 {self.reconnect_attempts} 次)")
-        time.sleep(delay)
-        
-        self.reconnecting = False
+        logger.info("[WS] 连接循环已退出")
     
     def _on_open(self, ws):
         """连接建立回调"""
         self.connected = True
-        self.reconnect_attempts = 0
-        self.last_pong_time = time.time()
+        self.reconnect_attempts = 0  # 重置重连计数
         logger.info("[WS] 连接已建立")
         
         # 重新订阅之前的频道
         self._resubscribe_all()
-        
-        # 启动心跳线程
-        self._start_heartbeat()
+        # [Fix #4] 移除自定义心跳线程，使用 run_forever 内置心跳
     
     def _on_message(self, ws, message):
-        """消息接收回调"""
+        """
+        [Fix #2] 消息接收回调 - 仅入队，不做业务处理
+        
+        生产者角色：将原始消息放入队列，立即返回
+        这样可以避免阻塞 WebSocket 网络线程
+        """
         try:
-            # 🔥 处理纯文本 pong 响应
+            self.msg_queue.put_nowait(message)
+        except Exception:
+            # 队列满时丢弃消息，避免阻塞
+            logger.warning("[WS] 消息队列已满，丢弃消息")
+    
+    def _process_queue_loop(self):
+        """
+        [Fix #2] 消息队列消费者循环
+        
+        消费者角色：从队列取出消息并处理
+        独立线程运行，与网络 I/O 解耦
+        
+        异常处理策略：
+        - queue.Empty: 正常超时，继续循环
+        - 处理异常: 记录日志，继续处理下一条消息（线程永不死亡）
+        """
+        logger.info("[WS] 消息处理线程已启动")
+        
+        while not self.stop_event.is_set():
+            try:
+                # 带超时的阻塞获取，允许检查停止信号
+                message = self.msg_queue.get(timeout=1.0)
+            except queue.Empty:
+                # 队列超时，继续循环检查 stop_event
+                continue
+            
+            # 哨兵值，退出循环
+            if message is None:
+                break
+            
+            # 🔥 关键：处理逻辑包裹在独立的 try-except 中
+            # 确保任何处理异常都不会导致工作线程崩溃
+            try:
+                self._process_message(message)
+            except Exception as e:
+                logger.error(f"[WS] 消息处理异常（线程继续运行）: {e}", exc_info=True)
+                # 继续处理下一条消息，线程永不死亡
+        
+        logger.info("[WS] 消息处理线程已退出")
+    
+    def _process_message(self, message: str):
+        """
+        实际的消息处理逻辑（从队列消费后调用）
+        """
+        try:
+            # 处理纯文本 pong 响应
             if message == "pong":
-                self.last_pong_time = time.time()
                 return
             
             data = json.loads(message)
             
             # 处理 JSON 格式的 pong
             if data.get("event") == "pong":
-                self.last_pong_time = time.time()
                 return
             
             # 处理订阅确认
             if data.get("event") == "subscribe":
-                logger.debug(f"[WS] 订阅确认: {data.get('arg', {})}")
+                logger.info(f"[WS] ✅ 订阅确认: {data.get('arg', {})}")
                 return
             
             # 处理错误
             if data.get("event") == "error":
-                logger.error(f"[WS] 错误: {data}")
+                logger.error(f"[WS] ❌ 订阅错误: {data}")
                 return
             
             # 处理数据推送
@@ -224,7 +315,6 @@ class OKXWebSocketClient:
                 self._handle_data_push(data)
                 
         except json.JSONDecodeError:
-            # 忽略无法解析的消息（可能是心跳响应）
             if message.strip().lower() != "pong":
                 logger.warning(f"[WS] 无法解析消息: {message[:100]}")
         except Exception as e:
@@ -239,30 +329,17 @@ class OKXWebSocketClient:
         self.connected = False
         logger.info(f"[WS] 连接关闭: {close_status_code} - {close_msg}")
     
-    def _start_heartbeat(self):
-        """启动心跳线程"""
-        def heartbeat_loop():
-            while self.connected and not self.should_stop:
-                try:
-                    if self.ws and self.connected:
-                        self.ws.send("ping")
-                except Exception as e:
-                    logger.warning(f"[WS] 心跳发送失败: {e}")
-                time.sleep(25)
-        
-        self.heartbeat_thread = threading.Thread(
-            target=heartbeat_loop,
-            daemon=True,
-            name="WS-Heartbeat"
-        )
-        self.heartbeat_thread.start()
-    
     def _resubscribe_all(self):
         """重新订阅所有频道"""
+        if not self.subscriptions:
+            logger.info("[WS] 无待重新订阅的频道")
+            return
+        
+        logger.info(f"[WS] 开始重新订阅 {len(self.subscriptions)} 个频道")
         for channel_key, sub_info in self.subscriptions.items():
             try:
                 self._send_subscribe(sub_info["channel"], sub_info["inst_id"], sub_info.get("extra_args", {}))
-                logger.debug(f"[WS] 重新订阅: {channel_key}")
+                logger.info(f"[WS] 重新订阅: {channel_key}")
             except Exception as e:
                 logger.error(f"[WS] 重新订阅失败 {channel_key}: {e}")
     
@@ -280,8 +357,34 @@ class OKXWebSocketClient:
             "args": [args]
         }
         
-        if self.ws and self.connected:
-            self.ws.send(json.dumps(msg))
+        self._safe_send(json.dumps(msg))
+    
+    def _safe_send(self, message: str) -> bool:
+        """
+        [Fix #1] 线程安全的消息发送
+        
+        使用 ws_lock 保护 ws.send() 调用，防止并发写入导致的 Broken Pipe
+        
+        Args:
+            message: 要发送的消息字符串
+            
+        Returns:
+            是否发送成功
+        """
+        with self.ws_lock:
+            if self.ws and self.connected:
+                try:
+                    self.ws.send(message)
+                    # 🔥 调试：打印发送的消息（仅订阅请求）
+                    if '"op": "subscribe"' in message or '"op":"subscribe"' in message:
+                        logger.debug(f"[WS] 发送订阅请求: {message[:200]}")
+                    return True
+                except Exception as e:
+                    logger.warning(f"[WS] 发送失败: {e}")
+                    return False
+            else:
+                logger.warning(f"[WS] 无法发送: ws={self.ws is not None} connected={self.connected}")
+        return False
     
     def _handle_data_push(self, data: Dict):
         """处理数据推送"""
@@ -379,12 +482,12 @@ class OKXWebSocketClient:
         inst_id = self._convert_symbol(symbol)
         
         # 🔥 OKX WebSocket K线频道格式
-        # 对于永续合约，使用 index-candle 或 candle 频道
-        # 格式: candle1m, candle5m, candle15m, candle1H, candle4H, candle1D, candle1Dutc
-        # 注意：OKX 使用大写的 H 和 D，小写的 m
         tf_normalized = self._normalize_timeframe(timeframe)
         channel = f"candle{tf_normalized}"
         channel_key = f"{channel}:{inst_id}"
+        
+        # 🔥 去重检查：如果已订阅，只添加回调，不重复发送请求
+        already_subscribed = channel_key in self.subscriptions
         
         # 记录订阅信息
         self.subscriptions[channel_key] = {
@@ -397,11 +500,20 @@ class OKXWebSocketClient:
         if callback:
             self.callbacks[channel_key].append(callback)
         
-        # 发送订阅请求
-        if self.connected:
-            self._send_subscribe(channel, inst_id)
-            logger.info(f"[WS] 订阅 K线: {inst_id} {timeframe}")
+        # 已订阅则跳过发送
+        if already_subscribed:
+            logger.debug(f"[WS] 已订阅，跳过重复请求: {channel_key}")
             return True
+        
+        # 发送订阅请求（使用线程安全方法）
+        if self.connected:
+            if self._safe_send(json.dumps({
+                "op": "subscribe",
+                "args": [{"channel": channel, "instId": inst_id}]
+            })):
+                logger.info(f"[WS] 订阅 K线: {inst_id} {timeframe}")
+                return True
+            return False
         else:
             logger.warning(f"[WS] 未连接，订阅将在连接后自动执行: {inst_id} {timeframe}")
             return False
@@ -421,6 +533,9 @@ class OKXWebSocketClient:
         channel = "tickers"
         channel_key = f"{channel}:{inst_id}"
         
+        # 🔥 去重检查：如果已订阅，只添加回调，不重复发送请求
+        already_subscribed = channel_key in self.subscriptions
+        
         # 记录订阅信息
         self.subscriptions[channel_key] = {
             "channel": channel,
@@ -431,11 +546,20 @@ class OKXWebSocketClient:
         if callback:
             self.callbacks[channel_key].append(callback)
         
-        # 发送订阅请求
-        if self.connected:
-            self._send_subscribe(channel, inst_id)
-            logger.info(f"[WS] 订阅行情: {inst_id}")
+        # 已订阅则跳过发送
+        if already_subscribed:
+            logger.debug(f"[WS] 已订阅，跳过重复请求: {channel_key}")
             return True
+        
+        # 发送订阅请求（使用线程安全方法）
+        if self.connected:
+            if self._safe_send(json.dumps({
+                "op": "subscribe",
+                "args": [{"channel": channel, "instId": inst_id}]
+            })):
+                logger.info(f"[WS] 订阅行情: {inst_id}")
+                return True
+            return False
         else:
             logger.warning(f"[WS] 未连接，订阅将在连接后自动执行: {inst_id}")
             return False
@@ -469,8 +593,8 @@ class OKXWebSocketClient:
         if channel_key in self.callbacks:
             del self.callbacks[channel_key]
         
-        # 发送取消订阅请求
-        if self.connected and self.ws:
+        # 发送取消订阅请求（使用线程安全方法）
+        if self.connected:
             msg = {
                 "op": "unsubscribe",
                 "args": [{
@@ -478,12 +602,11 @@ class OKXWebSocketClient:
                     "instId": inst_id
                 }]
             }
-            try:
-                self.ws.send(json.dumps(msg))
+            if self._safe_send(json.dumps(msg)):
                 logger.info(f"[WS] 取消订阅: {channel_key}")
                 return True
-            except Exception as e:
-                logger.error(f"[WS] 取消订阅失败: {e}")
+            else:
+                logger.error(f"[WS] 取消订阅失败")
                 return False
         
         return True
@@ -665,3 +788,67 @@ def stop_ws_client():
 def is_ws_available() -> bool:
     """检查 WebSocket 功能是否可用"""
     return WEBSOCKET_AVAILABLE
+
+
+# ============ 测试入口 ============
+if __name__ == "__main__":
+    """
+    简单测试：连接 OKX WebSocket，订阅 BTC-USDT-SWAP 行情，打印 10 秒数据后优雅退出
+    
+    运行方式: python okx_websocket.py
+    """
+    import sys
+    
+    # 配置日志输出到控制台
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    
+    print("=" * 50)
+    print("OKX WebSocket 客户端测试")
+    print("=" * 50)
+    
+    # 创建客户端
+    client = OKXWebSocketClient(use_aws=False)
+    
+    # 定义回调函数
+    def on_ticker(data):
+        """行情数据回调"""
+        ticker_data = data.get("data", [{}])[0]
+        last_price = ticker_data.get("last", "N/A")
+        print(f"[Ticker] BTC-USDT-SWAP 最新价: {last_price}")
+    
+    try:
+        # 启动连接
+        print("\n[Test] 正在启动 WebSocket 连接...")
+        if not client.start():
+            print("[Test] 连接失败，退出")
+            sys.exit(1)
+        
+        print("[Test] 连接成功！")
+        
+        # 订阅行情
+        print("[Test] 订阅 BTC-USDT-SWAP 行情...")
+        client.subscribe_ticker("BTC-USDT-SWAP", callback=on_ticker)
+        
+        # 运行 10 秒
+        print("[Test] 接收数据 10 秒...\n")
+        for i in range(10):
+            time.sleep(1)
+            # 也可以直接从缓存获取
+            ticker = client.get_ticker("BTC-USDT-SWAP")
+            if ticker:
+                print(f"[Cache] 第 {i+1} 秒 - 缓存价格: {ticker.get('last', 'N/A')}")
+        
+        print("\n[Test] 测试完成")
+        
+    except KeyboardInterrupt:
+        print("\n[Test] 收到中断信号")
+    
+    finally:
+        # 优雅停止
+        print("[Test] 正在停止客户端...")
+        client.stop()
+        print("[Test] 已退出")

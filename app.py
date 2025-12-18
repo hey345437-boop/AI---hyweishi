@@ -63,7 +63,7 @@ try:
         get_engine_status, get_control_flags, 
         get_bot_config, update_bot_config, set_control_flags,
         init_db,
-        get_paper_balance, get_paper_positions
+        get_paper_balance, get_paper_positions, get_hedge_positions
     )
     from db_bridge import get_bootstrap_state, get_credentials_status, verify_credentials_and_snapshot
 except ImportError as e:
@@ -222,46 +222,103 @@ def main():
             view_model["simulation_stats"]["initial_balance"] = paper_balance.get('equity', 200.0)
         
         if paper_positions:
-            # 转换paper_positions为view_model需要的格式
+            # 🔥 转换paper_positions为view_model需要的格式
+            # 同一个symbol如果有两个方向的仓位，需要区分主仓和对冲仓
             open_positions_dict = {}
-            # 检查paper_positions的结构
-            if isinstance(paper_positions, list):
+            hedge_positions_dict = {}
+            
+            # 辅助函数：格式化入场时间
+            def format_entry_time(ts):
+                if not ts or ts <= 0:
+                    return ""
+                from datetime import datetime
+                if ts > 1e12:
+                    ts_sec = ts / 1000
+                    ms_part = int(ts % 1000)
+                    return datetime.fromtimestamp(ts_sec).strftime('%m-%d %H:%M:%S') + f".{ms_part:03d}"
+                else:
+                    return datetime.fromtimestamp(ts).strftime('%m-%d %H:%M:%S')
+            
+            # 辅助函数：构建仓位数据
+            def build_position_data(pos):
+                qty = float(pos.get("qty", 0) or 0)
+                entry_price = float(pos.get("entry_price", 0) or 0)
+                unrealized_pnl = float(pos.get("unrealized_pnl", 0) or 0)
+                notional = qty * entry_price
+                created_ts = pos.get("created_at", 0) or pos.get("updated_at", 0)
+                return {
+                    "side": pos.get("pos_side", "long").upper(),
+                    "size": notional,
+                    "margin": notional / 20,
+                    "entry_price": entry_price,
+                    "entry_time": format_entry_time(created_ts),
+                    "pnl": unrealized_pnl
+                }
+            
+            # 🔥 第一步：按 symbol 分组所有仓位
+            positions_by_symbol = {}
+            if isinstance(paper_positions, dict):
+                for pos_key, pos in paper_positions.items():
+                    if isinstance(pos, dict):
+                        symbol = pos.get("symbol", pos_key.split("_")[0] if "_" in pos_key else pos_key)
+                        if symbol not in positions_by_symbol:
+                            positions_by_symbol[symbol] = []
+                        positions_by_symbol[symbol].append(pos)
+            elif isinstance(paper_positions, list):
                 for pos in paper_positions:
                     if isinstance(pos, dict) and "symbol" in pos:
                         symbol = pos["symbol"]
-                        # 🔥 转换入场时间戳为可读格式
-                        created_ts = pos.get("created_at", 0)
-                        entry_time_str = ""
-                        if created_ts and created_ts > 0:
-                            from datetime import datetime
-                            entry_time_str = datetime.fromtimestamp(created_ts).strftime('%m-%d %H:%M')
-                        notional = pos["qty"] * pos["entry_price"]
-                        open_positions_dict[symbol] = {
-                            "side": pos["side"],
-                            "size": notional,  # 名义价值
-                            "margin": notional / 20,  # 🔥 保证金（假设20x杠杆）
-                            "entry_price": pos["entry_price"],
-                            "entry_time": entry_time_str  # 🔥 添加入场时间
-                        }
-            elif isinstance(paper_positions, dict):
-                # 如果paper_positions是字典格式，直接使用
-                for symbol, pos in paper_positions.items():
-                    if isinstance(pos, dict):
-                        # 🔥 转换入场时间戳为可读格式
-                        created_ts = pos.get("created_at", 0)
-                        entry_time_str = ""
-                        if created_ts and created_ts > 0:
-                            from datetime import datetime
-                            entry_time_str = datetime.fromtimestamp(created_ts).strftime('%m-%d %H:%M')
-                        notional = pos.get("qty", 0) * pos.get("entry_price", 0)
-                        open_positions_dict[symbol] = {
-                            "side": pos.get("side", "long"),
-                            "size": notional,  # 名义价值
-                            "margin": notional / 20,  # 🔥 保证金（假设20x杠杆）
-                            "entry_price": pos.get("entry_price", 0),
-                            "entry_time": entry_time_str  # 🔥 添加入场时间
-                        }
+                        if symbol not in positions_by_symbol:
+                            positions_by_symbol[symbol] = []
+                        positions_by_symbol[symbol].append(pos)
+            
+            # 🔥 第二步：区分主仓和对冲仓
+            # 规则：同一个symbol如果有两个方向，先开的是主仓，后开的是对冲仓
+            for symbol, positions in positions_by_symbol.items():
+                if len(positions) == 1:
+                    # 只有一个仓位，作为主仓
+                    open_positions_dict[symbol] = build_position_data(positions[0])
+                elif len(positions) >= 2:
+                    # 有两个仓位，按 created_at 排序，先开的是主仓
+                    sorted_positions = sorted(positions, key=lambda p: p.get("created_at", 0) or p.get("updated_at", 0))
+                    # 第一个是主仓
+                    open_positions_dict[symbol] = build_position_data(sorted_positions[0])
+                    # 其余是对冲仓
+                    if symbol not in hedge_positions_dict:
+                        hedge_positions_dict[symbol] = []
+                    for hedge_pos in sorted_positions[1:]:
+                        hedge_positions_dict[symbol].append(build_position_data(hedge_pos))
+            
             view_model["open_positions"] = open_positions_dict
+            
+            # 🔥 同时加载 hedge_positions 表中的对冲仓位（如果有）
+            hedge_positions_raw = get_hedge_positions()
+            if hedge_positions_raw:
+                for hedge_pos in hedge_positions_raw:
+                    symbol = hedge_pos.get("symbol", "")
+                    if not symbol:
+                        continue
+                    
+                    qty = float(hedge_pos.get("qty", 0) or 0)
+                    entry_price = float(hedge_pos.get("entry_price", 0) or 0)
+                    unrealized_pnl = float(hedge_pos.get("unrealized_pnl", 0) or 0)
+                    notional = qty * entry_price
+                    created_ts = hedge_pos.get("created_at", 0) or hedge_pos.get("updated_at", 0)
+                    
+                    hedge_data = {
+                        "side": hedge_pos.get("pos_side", "short").upper(),
+                        "size": notional,
+                        "margin": notional / 20,
+                        "entry_price": entry_price,
+                        "entry_time": format_entry_time(created_ts),
+                        "pnl": unrealized_pnl
+                    }
+                    
+                    if symbol not in hedge_positions_dict:
+                        hedge_positions_dict[symbol] = []
+                    hedge_positions_dict[symbol].append(hedge_data)
+            
+            view_model["hedge_positions"] = hedge_positions_dict
     
     # 准备actions
     actions = {

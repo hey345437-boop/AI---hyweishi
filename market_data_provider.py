@@ -1193,6 +1193,11 @@ class WebSocketMarketDataProvider:
         self.ws_client: Optional[OKXWebSocketClient] = None
         self._subscribed_symbols: Dict[str, str] = {}  # {symbol: timeframe}
         
+        # 🔥 本地历史数据缓存（混合模式核心）
+        # {symbol: {timeframe: {'data': [...], 'last_ts': int, 'initialized': bool}}}
+        self._history_cache: Dict[str, Dict[str, Dict]] = {}
+        self._cache_lock = threading.Lock()
+        
         # 初始化 WebSocket 客户端
         if WS_IMPORT_OK and WEBSOCKET_AVAILABLE:
             self.ws_client = get_ws_client(use_aws)
@@ -1262,9 +1267,11 @@ class WebSocketMarketDataProvider:
         fallback_to_rest: bool = True
     ) -> Tuple[list, bool]:
         """
-        获取 K线数据
+        获取 K线数据（混合模式）
         
-        优先使用 WebSocket 缓存，不足时回退到 REST
+        🔥 混合模式逻辑：
+        1. 首次请求：用 REST 拉取完整历史数据，缓存到本地
+        2. 后续请求：用 WebSocket 增量更新最新 K 线
         
         Args:
             symbol: 交易对
@@ -1275,33 +1282,93 @@ class WebSocketMarketDataProvider:
         Returns:
             (K线数据, is_from_ws) 元组
         """
-        # 尝试从 WebSocket 获取
+        cache_key = f"{symbol}:{timeframe}"
+        
+        with self._cache_lock:
+            # 初始化缓存结构
+            if symbol not in self._history_cache:
+                self._history_cache[symbol] = {}
+            if timeframe not in self._history_cache[symbol]:
+                self._history_cache[symbol][timeframe] = {
+                    'data': [],
+                    'last_ts': 0,
+                    'initialized': False
+                }
+            
+            cache_entry = self._history_cache[symbol][timeframe]
+        
+        # 🔥 首次请求：用 REST 拉取完整历史数据
+        if not cache_entry['initialized']:
+            if fallback_to_rest and self.fallback_provider:
+                logger.info(f"[WS-Provider] 首次加载 {symbol} {timeframe}，使用 REST 拉取历史数据...")
+                data, is_stale = self.fallback_provider.get_ohlcv(symbol, timeframe, limit)
+                
+                if data and len(data) > 0:
+                    with self._cache_lock:
+                        cache_entry['data'] = data
+                        cache_entry['last_ts'] = data[-1][0] if data else 0
+                        cache_entry['initialized'] = True
+                    
+                    # 确保 WebSocket 已订阅
+                    if self.ws_client and self.ws_client.is_connected():
+                        if symbol not in self._subscribed_symbols:
+                            self.subscribe(symbol, timeframe)
+                    
+                    logger.info(f"[WS-Provider] {symbol} {timeframe} 历史数据已缓存: {len(data)} bars")
+                    return data, False
+                else:
+                    return [], False
+            else:
+                return [], False
+        
+        # 🔥 后续请求：用 WebSocket 增量更新
         if self.ws_client and self.ws_client.is_connected():
             # 确保已订阅
             if symbol not in self._subscribed_symbols:
                 self.subscribe(symbol, timeframe)
-                # 等待一小段时间让数据到达
-                time.sleep(0.5)
             
-            ws_data = self.ws_client.get_candles(symbol, timeframe, limit)
+            # 获取 WebSocket 最新数据
+            ws_data = self.ws_client.get_candles(symbol, timeframe, 10)  # 只取最新几根
             
-            # WebSocket 数据足够
-            if ws_data and len(ws_data) >= min(limit, 50):
-                logger.debug(f"[WS-Provider] 使用 WebSocket 数据: {symbol} {len(ws_data)} bars")
-                return ws_data, True
-            
-            # WebSocket 数据不足，需要补充
             if ws_data and len(ws_data) > 0:
-                logger.debug(f"[WS-Provider] WebSocket 数据不足 ({len(ws_data)}/{limit})，需要补充")
+                with self._cache_lock:
+                    cached_data = cache_entry['data']
+                    last_cached_ts = cache_entry['last_ts']
+                    
+                    # 合并新数据
+                    updated = False
+                    for candle in ws_data:
+                        candle_ts = candle[0]
+                        
+                        if candle_ts > last_cached_ts:
+                            # 新 K 线，追加
+                            cached_data.append(candle)
+                            updated = True
+                        elif candle_ts == last_cached_ts:
+                            # 更新最后一根（可能还在形成中）
+                            if cached_data:
+                                cached_data[-1] = candle
+                                updated = True
+                    
+                    if updated:
+                        # 保持数据量不超过 limit
+                        if len(cached_data) > limit:
+                            cached_data = cached_data[-limit:]
+                        
+                        cache_entry['data'] = cached_data
+                        cache_entry['last_ts'] = cached_data[-1][0] if cached_data else 0
+                    
+                    result_data = cached_data[-limit:] if len(cached_data) > limit else cached_data
+                
+                logger.debug(f"[WS-Provider] {symbol} {timeframe} 增量更新完成: {len(result_data)} bars")
+                return result_data, True
         
-        # 回退到 REST
-        if fallback_to_rest and self.fallback_provider:
-            logger.debug(f"[WS-Provider] 回退到 REST: {symbol}")
-            data, is_stale = self.fallback_provider.get_ohlcv(symbol, timeframe, limit)
-            return data, False
+        # WebSocket 不可用，返回缓存数据
+        with self._cache_lock:
+            cached_data = cache_entry['data']
+            result_data = cached_data[-limit:] if len(cached_data) > limit else cached_data
         
-        # 无数据
-        return [], False
+        return result_data, False
     
     def get_ticker(self, symbol: str, fallback_to_rest: bool = True) -> Optional[Dict]:
         """
@@ -1345,7 +1412,43 @@ class WebSocketMarketDataProvider:
         if self.ws_client:
             stats.update(self.ws_client.get_cache_stats())
         
+        # 添加本地缓存统计
+        with self._cache_lock:
+            cache_stats = {}
+            for symbol, tf_data in self._history_cache.items():
+                for tf, entry in tf_data.items():
+                    key = f"{symbol}:{tf}"
+                    cache_stats[key] = {
+                        'bars': len(entry['data']),
+                        'initialized': entry['initialized']
+                    }
+            stats['history_cache'] = cache_stats
+        
         return stats
+    
+    def clear_cache(self, symbol: str = None, timeframe: str = None):
+        """
+        清除本地历史数据缓存
+        
+        Args:
+            symbol: 指定币种（None 表示全部）
+            timeframe: 指定周期（None 表示全部）
+        """
+        with self._cache_lock:
+            if symbol is None:
+                # 清除全部
+                self._history_cache.clear()
+                logger.info("[WS-Provider] 已清除全部历史数据缓存")
+            elif timeframe is None:
+                # 清除指定币种的全部周期
+                if symbol in self._history_cache:
+                    del self._history_cache[symbol]
+                    logger.info(f"[WS-Provider] 已清除 {symbol} 的历史数据缓存")
+            else:
+                # 清除指定币种的指定周期
+                if symbol in self._history_cache and timeframe in self._history_cache[symbol]:
+                    del self._history_cache[symbol][timeframe]
+                    logger.info(f"[WS-Provider] 已清除 {symbol} {timeframe} 的历史数据缓存")
 
 
 def create_hybrid_market_data_provider(

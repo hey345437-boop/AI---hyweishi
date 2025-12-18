@@ -9,6 +9,13 @@ from datetime import datetime
 from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# 🔥 异步市场数据获取器（真正的并发）
+try:
+    from async_market_fetcher import fetch_batch_ohlcv_sync, FetchTask
+    ASYNC_FETCHER_AVAILABLE = True
+except ImportError:
+    ASYNC_FETCHER_AVAILABLE = False
+
 # ============ 加载 .env 环境变量 ============
 # 必须在其他模块导入之前执行，确保加密密钥等配置正确加载
 try:
@@ -223,6 +230,220 @@ def clear_signal_cache():
         clear_signal_cache_db()
     except Exception:
         pass
+
+
+# 🔥🔥🔥 全局价格缓存（持仓币种专用）🔥🔥🔥
+_holdings_price_cache: Dict[str, Dict] = {}  # {symbol: {'last': price, 'ts': timestamp}}
+_holdings_price_last_fetch: float = 0  # 上次获取时间
+_HOLDINGS_PRICE_MIN_INTERVAL: float = 2.0  # 最小获取间隔（秒）
+
+
+def fetch_prices_for_holdings(exchange, force: bool = False) -> Dict[str, Dict]:
+    """
+    🔥 获取持仓币种的最新价格（带限频控制）
+    
+    Args:
+        exchange: ccxt 交易所实例
+        force: 是否强制刷新（忽略限频）
+    
+    Returns:
+        {symbol: {'last': price, ...}}
+    
+    特点：
+    1. 只获取有持仓的币种，减少 API 调用
+    2. 最快 2 秒请求一次 API，防止限频
+    3. 直接调用 ccxt，绕过 MarketDataProvider 缓存
+    """
+    global _holdings_price_cache, _holdings_price_last_fetch
+    
+    now = time.time()
+    
+    # 限频检查（除非强制刷新）
+    if not force and (now - _holdings_price_last_fetch) < _HOLDINGS_PRICE_MIN_INTERVAL:
+        return _holdings_price_cache
+    
+    if exchange is None:
+        return _holdings_price_cache
+    
+    # 获取持仓币种列表
+    position_symbols = set()
+    try:
+        paper_positions = get_paper_positions()
+        if paper_positions:
+            for pos_key, pos in paper_positions.items():
+                symbol = pos.get('symbol', '')
+                qty = float(pos.get('qty', 0) or 0)
+                if symbol and qty > 0:
+                    position_symbols.add(symbol)
+        
+        hedge_positions = get_hedge_positions()
+        if hedge_positions:
+            for hedge_pos in hedge_positions:
+                symbol = hedge_pos.get('symbol', '')
+                qty = float(hedge_pos.get('qty', 0) or 0)
+                if symbol and qty > 0:
+                    position_symbols.add(symbol)
+    except Exception:
+        pass
+    
+    if not position_symbols:
+        return _holdings_price_cache
+    
+    # 直接调用 ccxt API 获取最新价格
+    new_prices = {}
+    for symbol in position_symbols:
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            if ticker:
+                new_prices[symbol] = ticker
+        except Exception:
+            # 获取失败时使用旧缓存
+            if symbol in _holdings_price_cache:
+                new_prices[symbol] = _holdings_price_cache[symbol]
+    
+    # 更新全局缓存
+    if new_prices:
+        _holdings_price_cache = new_prices
+        _holdings_price_last_fetch = now
+    
+    return _holdings_price_cache
+
+
+def mark_to_market_paper_positions(tickers: Dict[str, Dict], leverage: int = 20, db_config=None) -> Dict[str, Any]:
+    """
+    🔥 Mark-to-Market: 使用实时价格更新模拟持仓的浮动盈亏
+    
+    Args:
+        tickers: 实时行情字典 {symbol: {'last': price, ...}}
+        leverage: 杠杆倍数
+        db_config: 数据库配置
+    
+    Returns:
+        {
+            'total_unrealized_pnl': float,  # 总浮动盈亏
+            'total_used_margin': float,     # 总已用保证金
+            'total_notional': float,        # 总名义价值
+            'positions_updated': int,       # 更新的持仓数量
+            'new_equity': float             # 新权益
+        }
+    """
+    total_unrealized_pnl = 0.0
+    total_used_margin = 0.0
+    total_notional = 0.0
+    positions_updated = 0
+    
+    # 获取当前余额
+    paper_bal = get_paper_balance(db_config)
+    wallet_balance = float(paper_bal.get('wallet_balance', 0) or paper_bal.get('equity', 0) or 0)
+    if wallet_balance == 0:
+        wallet_balance = 200.0  # 默认值
+    
+    # 获取所有主仓位
+    paper_positions = get_paper_positions(db_config)
+    
+    if paper_positions:
+        for pos_key, pos in paper_positions.items():
+            symbol = pos.get('symbol', '')
+            pos_side = pos.get('pos_side', 'long')
+            qty = float(pos.get('qty', 0) or 0)
+            entry_price = float(pos.get('entry_price', 0) or 0)
+            
+            if qty <= 0 or entry_price <= 0:
+                continue
+            
+            # 获取实时价格
+            current_price = 0.0
+            if symbol in tickers:
+                current_price = float(tickers[symbol].get('last', 0) or 0)
+            
+            if current_price <= 0:
+                # 没有实时价格，使用入场价
+                current_price = entry_price
+            
+            # 价格对比（静默处理，不打印）
+            
+            # 计算浮动盈亏
+            # LONG: pnl = (current - entry) * qty
+            # SHORT: pnl = (entry - current) * qty
+            if pos_side.lower() == 'long':
+                unrealized_pnl = (current_price - entry_price) * qty
+            else:
+                unrealized_pnl = (entry_price - current_price) * qty
+            
+            # 计算保证金和名义价值
+            notional = qty * entry_price
+            margin = notional / leverage
+            
+            total_unrealized_pnl += unrealized_pnl
+            total_used_margin += margin
+            total_notional += notional
+            
+            # 更新持仓的浮动盈亏
+            update_paper_position(
+                symbol=symbol,
+                pos_side=pos_side,
+                unrealized_pnl=unrealized_pnl
+            )
+            positions_updated += 1
+    
+    # 获取对冲仓位
+    hedge_positions = get_hedge_positions(db_config)
+    
+    if hedge_positions:
+        for hedge_pos in hedge_positions:
+            symbol = hedge_pos.get('symbol', '')
+            pos_side = hedge_pos.get('pos_side', 'long')
+            qty = float(hedge_pos.get('qty', 0) or 0)
+            entry_price = float(hedge_pos.get('entry_price', 0) or 0)
+            
+            if qty <= 0 or entry_price <= 0:
+                continue
+            
+            # 获取实时价格
+            current_price = 0.0
+            if symbol in tickers:
+                current_price = float(tickers[symbol].get('last', 0) or 0)
+            
+            if current_price <= 0:
+                current_price = entry_price
+            
+            # 计算浮动盈亏
+            if pos_side.lower() == 'long':
+                unrealized_pnl = (current_price - entry_price) * qty
+            else:
+                unrealized_pnl = (entry_price - current_price) * qty
+            
+            # 计算保证金和名义价值
+            notional = qty * entry_price
+            margin = notional / leverage
+            
+            total_unrealized_pnl += unrealized_pnl
+            total_used_margin += margin
+            total_notional += notional
+    
+    # 计算新权益
+    new_equity = wallet_balance + total_unrealized_pnl
+    free_margin = new_equity - total_used_margin
+    
+    # 更新账户余额
+    update_paper_balance(
+        wallet_balance=wallet_balance,
+        unrealized_pnl=total_unrealized_pnl,
+        equity=new_equity,
+        used_margin=total_used_margin,
+        available=free_margin
+    )
+    
+    return {
+        'total_unrealized_pnl': total_unrealized_pnl,
+        'total_used_margin': total_used_margin,
+        'total_notional': total_notional,
+        'positions_updated': positions_updated,
+        'new_equity': new_equity,
+        'free_margin': free_margin,
+        'wallet_balance': wallet_balance
+    }
+
 
 def simulate_fill(order: dict, last_price: float, db_config=None) -> dict:
     """模拟撮合引擎
@@ -554,7 +775,9 @@ def main():
                         fallback_provider=provider
                     )
                     if ws_provider.start():
-                        logger.info("[WS] WebSocket 数据源已启动")
+                        logger.info("[WS] WebSocket 数据源已启动（订阅将在币种验证后执行）")
+                        # 🔥 注意：订阅移到 validate_symbols_against_okx 之后执行
+                        # 防止订阅不支持的币种导致 30 秒无数据断连
                     else:
                         logger.warning("[WS] WebSocket 启动失败，将使用 REST")
                         ws_provider = None
@@ -586,6 +809,13 @@ def main():
     else:
         # 🔥 验证交易池中的币种是否被 OKX 支持，自动剔除不支持的
         TRADE_SYMBOLS = validate_symbols_against_okx(TRADE_SYMBOLS, exchange)
+    
+    # 🔥 WebSocket 订阅（在币种验证之后执行）
+    if ws_provider is not None and ws_provider.is_connected():
+        for sym in TRADE_SYMBOLS:
+            for tf in ['1m', '3m', '5m']:  # 订阅常用周期
+                ws_provider.subscribe(sym, tf)
+        logger.info(f"[WS] 已订阅 {len(TRADE_SYMBOLS)} 个已验证币种的 K线数据")
     
     # 初始化引擎状态
     update_engine_status(
@@ -712,200 +942,178 @@ def main():
         """
         后台余额同步线程
         
-        在每分钟的 30秒 和 55秒 执行预检查：
-        - 查询余额
-        - 计算风控
-        - 更新 preflight_cache
+        🔥 分流逻辑：
+        - 第 30 秒：调用 API 获取持仓价格 → MTM 计算 → 打印详细日志 → 更新 preflight_cache
+        - 第 0 秒：扫描时使用缓存的风控结果（不调用 API）
+        - 其他时间：不调用 API，防止限流
         """
         nonlocal run_mode, max_lev, TRADE_SYMBOLS
+        last_mtm_minute = -1  # 记录上次 MTM 执行的分钟
         
         while True:
             try:
                 now = datetime.now()
                 current_second = now.second
+                current_minute = now.minute
                 
-                # 🔥 在 30秒 和 55秒 执行预检查
-                if current_second in [30, 55]:
-                    # 避免同一秒重复检查
-                    if preflight_cache.last_check_second == current_second:
-                        time.sleep(0.5)
-                        continue
+                # 🔥 只在第 28-32 秒执行 MTM（每分钟一次）
+                is_mtm_window = 28 <= current_second <= 32
+                already_executed_this_minute = (current_minute == last_mtm_minute)
+                
+                if not is_mtm_window or already_executed_this_minute:
+                    time.sleep(0.5)
+                    continue
+                
+                # 标记本分钟已执行
+                last_mtm_minute = current_minute
+                
+                # 检查交易是否启用
+                _bot_config = get_bot_config()
+                _enable_trading = _bot_config.get('enable_trading', 0)
+                _control = get_control_flags()
+                _pause_trading = _control.get("pause_trading", 0)
+                
+                if _enable_trading != 1 or _pause_trading == 1:
+                    time.sleep(0.5)
+                    continue
+                
+                # 🔥 热加载杠杆参数
+                _trading_params = get_trading_params()
+                _new_lev = _trading_params.get('leverage', 20)
+                if _new_lev != max_lev:
+                    max_lev = _new_lev
+                    logger.debug(f"[preflight] 杠杆已更新: {max_lev}x")
+                
+                # 🔥🔥🔥 MTM 风控检查（每分钟第 30 秒执行一次）🔥🔥🔥
+                try:
+                    wallet_balance = 0.0
+                    unrealized_pnl = 0.0
+                    equity = 0.0
+                    used_margin = 0.0
+                    total_notional = 0.0
                     
-                    preflight_cache.last_check_second = current_second
-                    
-                    # 检查交易是否启用
-                    _bot_config = get_bot_config()
-                    _enable_trading = _bot_config.get('enable_trading', 0)
-                    _control = get_control_flags()
-                    _pause_trading = _control.get("pause_trading", 0)
-                    
-                    if _enable_trading != 1 or _pause_trading == 1:
-                        # 交易未启用，跳过检查
-                        time.sleep(0.5)
-                        continue
-                    
-                    # 🔥 热加载杠杆参数（确保风控计算使用最新杠杆）
-                    _trading_params = get_trading_params()
-                    _new_lev = _trading_params.get('leverage', 20)
-                    if _new_lev != max_lev:
-                        max_lev = _new_lev
-                        logger.debug(f"[preflight] 杠杆已更新: {max_lev}x")
-                    
-                    # 🔥🔥🔥 核心修复：使用名义价值 (Notional Value) 进行风控检查 🔥🔥🔥
-                    # 
-                    # 之前的 BUG：使用保证金 (margin = notional / leverage) 进行风控
-                    # 导致 $35 的持仓在 50x 杠杆下只计算为 $0.7，风控完全失效
-                    #
-                    # 正确逻辑：
-                    # - 名义价值 (Notional) = 持仓数量 × 当前价格
-                    # - 风控规则：总名义价值 <= 权益 × 10%
-                    # - 保证金仅供参考，不用于风控判断
-                    try:
-                        # 🔥🔥🔥 标准金融字段 🔥🔥🔥
-                        # wallet_balance: 钱包余额（静态）
-                        # unrealized_pnl: 未实现盈亏
-                        # equity: 动态权益 = wallet_balance + unrealized_pnl
-                        # used_margin: 已用保证金
-                        # free_margin: 可用保证金 = equity - used_margin
-                        wallet_balance = 0.0
-                        unrealized_pnl = 0.0
-                        equity = 0.0
-                        used_margin = 0.0
-                        total_notional = 0.0  # 🔥 总持仓名义价值（用于风控）
+                    if run_mode in ('paper', 'sim', 'paper_on_real'):
+                        # 🔥 步骤1：调用 API 获取持仓币种的最新价格
+                        exchange_instance = provider.exchange if provider and hasattr(provider, 'exchange') else None
+                        preflight_tickers = fetch_prices_for_holdings(exchange_instance, force=True)
                         
-                        if run_mode in ('paper', 'sim', 'paper_on_real'):
-                            # Paper/Sim模式：使用本地模拟账户
-                            paper_bal = get_paper_balance()
-                            wallet_balance = float(paper_bal.get('wallet_balance', 0) or paper_bal.get('equity', 0) or 0) if paper_bal else 0
-                            unrealized_pnl = float(paper_bal.get('unrealized_pnl', 0) or 0) if paper_bal else 0
-                            
-                            if wallet_balance == 0:
-                                wallet_balance = 200.0  # 默认值
-                            
-                            # equity = wallet_balance + unrealized_pnl
-                            equity = wallet_balance + unrealized_pnl
-                            
-                            # 🔥 计算主仓位的名义价值和保证金
-                            paper_positions = get_paper_positions()
-                            
-                            # 🔥 调试：打印持仓数量
-                            main_pos_count = len(paper_positions) if paper_positions else 0
-                            logger.info(f"[risk-debug] 主仓数量: {main_pos_count} | 持仓列表: {list(paper_positions.keys()) if paper_positions else []}")
-                            
-                            if paper_positions:
-                                for pos_key, pos in paper_positions.items():
-                                    qty = float(pos.get('qty', 0) or 0)
-                                    entry_price = float(pos.get('entry_price', 0) or 0)
-                                    
-                                    # 🔥 调试：打印每个持仓的原始数据
-                                    logger.info(f"[risk-debug] 持仓 {pos_key}: raw_qty={pos.get('qty')} raw_price={pos.get('entry_price')} parsed_qty={qty} parsed_price={entry_price}")
-                                    
-                                    if qty > 0 and entry_price > 0:
-                                        # 🔥 名义价值 = 数量 × 价格
-                                        notional = qty * entry_price
-                                        margin = notional / max_lev
-                                        total_notional += notional
-                                        used_margin += margin
-                                        logger.info(f"[risk] 主仓 {pos_key}: qty={qty:.6f} price={entry_price:.2f} notional=${notional:.2f} margin=${margin:.2f}")
-                            
-                            # 🔥 计算对冲仓位的名义价值和保证金
-                            hedge_positions = get_hedge_positions()
-                            
-                            # 🔥 调试：打印对冲仓数量
-                            hedge_pos_count = len(hedge_positions) if hedge_positions else 0
-                            logger.info(f"[risk-debug] 对冲仓数量: {hedge_pos_count}")
-                            
-                            if hedge_positions:
-                                for hedge_pos in hedge_positions:
-                                    qty = float(hedge_pos.get('qty', 0) or 0)
-                                    entry_price = float(hedge_pos.get('entry_price', 0) or 0)
-                                    if qty > 0 and entry_price > 0:
-                                        # 🔥 名义价值 = 数量 × 价格
-                                        notional = qty * entry_price
-                                        margin = notional / max_lev
-                                        total_notional += notional
-                                        used_margin += margin
-                                        logger.info(f"[risk] 对冲 {hedge_pos.get('symbol', '?')}: qty={qty:.6f} price={entry_price:.2f} notional=${notional:.2f} margin=${margin:.2f}")
-                            
-                            # 🔥 调试汇总：打印最终计算结果
-                            logger.info(f"[risk-debug] 汇总: 主仓={main_pos_count} 对冲={hedge_pos_count} | 总名义价值=${total_notional:.2f} | 总保证金=${used_margin:.2f} | 杠杆={max_lev}x")
-                            
-                            # 🔥 同步标准金融字段到数据库
-                            free_margin = equity - used_margin
-                            update_paper_balance(
-                                wallet_balance=wallet_balance,
-                                unrealized_pnl=unrealized_pnl,
-                                used_margin=used_margin
-                            )
-                        else:
-                            # Live模式：从交易所获取真实数据
-                            if provider is None:
-                                preflight_cache.update(True, 0.0, 0.0, "provider未初始化")
-                                time.sleep(0.5)
-                                continue
-                            
+                        # 🔥 步骤2：执行 MTM 更新浮动盈亏
+                        mtm_result = None
+                        if preflight_tickers:
                             try:
-                                bal = provider.get_balance()
-                                # 交易所返回的 total 是 equity
-                                equity = float(bal.get('total', {}).get('USDT', 0)) if isinstance(bal, dict) else 0
-                                # 交易所返回的 free 是 free_margin
-                                free_from_exchange = float(bal.get('free', {}).get('USDT', 0)) if isinstance(bal, dict) else 0
-                                # used_margin = equity - free_margin
-                                used_margin = equity - free_from_exchange if free_from_exchange > 0 else 0
+                                mtm_result = mark_to_market_paper_positions(preflight_tickers, leverage=max_lev)
                             except Exception as e:
-                                logger.debug(f"[balance-sync] 余额获取失败: {e}")
-                                time.sleep(0.5)
-                                continue
-                            
-                            # 🔥 获取持仓并计算名义价值
-                            try:
-                                positions = provider.get_positions(list(TRADE_SYMBOLS.keys()) if TRADE_SYMBOLS else None)
-                                if positions:
-                                    for symbol, pos in positions.items():
-                                        contracts = float(pos.get('contracts', 0) or pos.get('positionAmt', 0) or 0)
-                                        if contracts > 0:
-                                            mark_price = float(pos.get('markPrice', 0) or pos.get('entryPrice', 0) or 0)
-                                            if mark_price > 0:
-                                                # 🔥 名义价值 = 合约数 × 标记价格
-                                                notional = contracts * mark_price
-                                                total_notional += notional
-                                                logger.debug(f"[risk] Live {symbol}: contracts={contracts:.6f} price={mark_price:.2f} notional=${notional:.2f}")
-                            except Exception:
-                                pass
+                                logger.debug(f"[MTM] 更新失败: {e}")
                         
-                        # 🔥🔥🔥 核心风控计算 🔥🔥🔥
-                        # 规则1：已用保证金 <= 权益 × 10%
-                        # 规则2：总名义价值 <= 权益 × 10%（更严格）
-                        free_margin = equity - used_margin
+                        # 🔥 步骤3：读取 MTM 更新后的数据库值
+                        paper_bal = get_paper_balance()
+                        wallet_balance = float(paper_bal.get('wallet_balance', 0) or 0) if paper_bal else 0
+                        unrealized_pnl = float(paper_bal.get('unrealized_pnl', 0) or 0) if paper_bal else 0
+                        equity = float(paper_bal.get('equity', 0) or 0) if paper_bal else 0
+                        used_margin = float(paper_bal.get('used_margin', 0) or 0) if paper_bal else 0
                         
+                        if wallet_balance == 0:
+                            wallet_balance = 200.0
                         if equity == 0:
-                            preflight_cache.update(False, 0.0, 0.0, "余额为0", total_notional=0.0, total_margin=0.0)
-                            print(f"⚠️ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: $0 | 状态: 余额为0")
+                            equity = wallet_balance + unrealized_pnl
+                        
+                        # 🔥 步骤4：获取持仓信息并打印详细日志
+                        paper_positions = get_paper_positions()
+                        hedge_positions = get_hedge_positions()
+                        main_pos_count = len(paper_positions) if paper_positions else 0
+                        hedge_pos_count = len(hedge_positions) if hedge_positions else 0
+                        
+                        # 打印每个持仓的详细信息
+                        if paper_positions:
+                            for pos_key, pos in paper_positions.items():
+                                symbol = pos.get('symbol', '')
+                                pos_side = pos.get('pos_side', 'long')
+                                qty = float(pos.get('qty', 0) or 0)
+                                entry_price = float(pos.get('entry_price', 0) or 0)
+                                if qty > 0 and entry_price > 0:
+                                    notional = qty * entry_price
+                                    total_notional += notional
+                                    # 获取当前价格
+                                    current_price = entry_price
+                                    if symbol in preflight_tickers:
+                                        current_price = float(preflight_tickers[symbol].get('last', entry_price) or entry_price)
+                                    print(f"   📊 [MTM] {symbol} {pos_side}: entry={entry_price:.8f} current={current_price:.8f} qty={qty:.2f}")
+                        
+                        if hedge_positions:
+                            for hedge_pos in hedge_positions:
+                                symbol = hedge_pos.get('symbol', '')
+                                pos_side = hedge_pos.get('pos_side', 'long')
+                                qty = float(hedge_pos.get('qty', 0) or 0)
+                                entry_price = float(hedge_pos.get('entry_price', 0) or 0)
+                                if qty > 0 and entry_price > 0:
+                                    notional = qty * entry_price
+                                    total_notional += notional
+                                    current_price = entry_price
+                                    if symbol in preflight_tickers:
+                                        current_price = float(preflight_tickers[symbol].get('last', entry_price) or entry_price)
+                                    print(f"   📊 [MTM] {symbol} {pos_side}: entry={entry_price:.8f} current={current_price:.8f} qty={qty:.2f}")
+                        
+                        # 打印 MTM 汇总
+                        if mtm_result and mtm_result['positions_updated'] > 0:
+                            print(f"💹 [MTM] 持仓={mtm_result['positions_updated']} | PnL=${mtm_result['total_unrealized_pnl']:.2f} | 保证金=${used_margin:.2f}")
+                        
+                        free_margin = equity - used_margin
+                    else:
+                        # Live模式：从交易所获取真实数据
+                        if provider is None:
+                            preflight_cache.update(True, 0.0, 0.0, "provider未初始化")
+                            continue
+                        
+                        try:
+                            bal = provider.get_balance()
+                            equity = float(bal.get('total', {}).get('USDT', 0)) if isinstance(bal, dict) else 0
+                            free_from_exchange = float(bal.get('free', {}).get('USDT', 0)) if isinstance(bal, dict) else 0
+                            used_margin = equity - free_from_exchange if free_from_exchange > 0 else 0
+                        except Exception as e:
+                            logger.debug(f"[balance-sync] 余额获取失败: {e}")
+                            continue
+                        
+                        # 获取持仓并计算名义价值
+                        try:
+                            positions = provider.get_positions(list(TRADE_SYMBOLS.keys()) if TRADE_SYMBOLS else None)
+                            if positions:
+                                for symbol, pos in positions.items():
+                                    contracts = float(pos.get('contracts', 0) or pos.get('positionAmt', 0) or 0)
+                                    if contracts > 0:
+                                        mark_price = float(pos.get('markPrice', 0) or pos.get('entryPrice', 0) or 0)
+                                        if mark_price > 0:
+                                            notional = contracts * mark_price
+                                            total_notional += notional
+                        except Exception:
+                            pass
+                        
+                        free_margin = equity - used_margin
+                    
+                    # 🔥🔥🔥 核心风控计算并更新缓存 🔥🔥🔥
+                    if equity == 0:
+                        preflight_cache.update(False, 0.0, 0.0, "余额为0", total_notional=0.0, total_margin=0.0)
+                        print(f"⚠️ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: $0 | 状态: 余额为0")
+                    else:
+                        max_allowed_margin = equity * 0.10
+                        remaining_margin = max_allowed_margin - used_margin
+                        
+                        if used_margin >= max_allowed_margin:
+                            preflight_cache.update(
+                                False, 0.0, equity, 
+                                f"已用保证金超限 ({used_margin:.2f}/{max_allowed_margin:.2f})",
+                                total_notional=total_notional, total_margin=used_margin
+                            )
+                            print(f"🚨 [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 限额: ${max_allowed_margin:.2f} | 状态: ❌ 已超限")
                         else:
-                            max_allowed_margin = equity * 0.10  # 🔥 最大允许保证金
-                            remaining_margin = max_allowed_margin - used_margin
-                            
-                            if used_margin >= max_allowed_margin:
-                                preflight_cache.update(
-                                    False, 0.0, equity, 
-                                    f"已用保证金超限 ({used_margin:.2f}/{max_allowed_margin:.2f})",
-                                    total_notional=total_notional, total_margin=used_margin
-                                )
-                                # 🔥 打印风控结果（超限）
-                                print(f"🚨 [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 限额: ${max_allowed_margin:.2f} | 可用: ${free_margin:.2f} | 状态: ❌ 已超限")
-                            else:
-                                preflight_cache.update(
-                                    True, remaining_margin, equity, "OK",
-                                    total_notional=total_notional, total_margin=used_margin
-                                )
-                                # 🔥 打印风控结果（正常）
-                                print(f"✅ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 剩余额度: ${remaining_margin:.2f} | 可用: ${free_margin:.2f} | 状态: 可开仓")
-                        
-                        logger.info(f"[balance-sync] {now.strftime('%H:%M:%S')} | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 可用: ${free_margin:.2f} | 名义价值: ${total_notional:.2f}")
-                        
-                    except Exception as e:
-                        logger.error(f"[balance-sync] 预检查异常: {e}")
-                        preflight_cache.update(True, 0.0, 0.0, f"异常: {e}")
+                            preflight_cache.update(
+                                True, remaining_margin, equity, "OK",
+                                total_notional=total_notional, total_margin=used_margin
+                            )
+                            print(f"✅ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 剩余额度: ${remaining_margin:.2f} | 状态: 可开仓")
+                    
+                except Exception as e:
+                    logger.error(f"[balance-sync] 预检查异常: {e}")
+                    preflight_cache.update(True, 0.0, 0.0, f"异常: {e}")
                     
                     # ============================================================
                     # 🔥 策略预加载 (Strategy Pre-Loading)
@@ -1360,7 +1568,8 @@ def main():
                                 fallback_provider=provider
                             )
                             if ws_provider.start():
-                                logger.info("[WS] WebSocket 数据源已启动（热加载）")
+                                logger.info("[WS] WebSocket 数据源已启动（热加载，订阅将在币种验证后执行）")
+                                # 🔥 注意：订阅移到下方 TRADE_SYMBOLS 更新后执行
                             else:
                                 ws_provider = None
                         except Exception as e:
@@ -1391,28 +1600,88 @@ def main():
                         # 🔥 验证并剔除不支持的币种
                         TRADE_SYMBOLS = validate_symbols_against_okx(_temp_symbols, exchange) if exchange else _temp_symbols
                     
+                    # 🔥 WebSocket 订阅（在币种验证之后执行）
+                    if ws_provider is not None and ws_provider.is_connected():
+                        for sym in TRADE_SYMBOLS:
+                            for tf in ['1m', '3m', '5m']:
+                                ws_provider.subscribe(sym, tf)
+                        logger.info(f"[WS] 已订阅 {len(TRADE_SYMBOLS)} 个已验证币种的 K线数据（热加载）")
+                    
                     last_config_updated_at = new_bot_config.get('updated_at', 0)
                     set_control_flags(reload_config=0)
                 except Exception as e:
                     logger.error(f"配置重载失败: {e}")
                     set_control_flags(reload_config=0)
             
-            # 🔥 步骤2：获取所有币种的实时价格（静默模式）
+            # 🔥 步骤2：批量获取所有币种的实时价格（优化：一次 API 调用）
             tickers = {}
             price_fetch_start = time.time()
             
-            for symbol in TRADE_SYMBOLS.keys():
-                try:
-                    if provider is not None:
-                        ticker = provider.get_ticker(symbol)
-                        tickers[symbol] = ticker
-                    else:
+            try:
+                if provider is not None and hasattr(provider, 'exchange'):
+                    # 🔥 优化：使用 fetch_tickers 批量获取，而不是循环调用 get_ticker
+                    symbols_list = list(TRADE_SYMBOLS.keys())
+                    all_tickers = provider.exchange.fetch_tickers(symbols_list)
+                    if all_tickers:
+                        for symbol in symbols_list:
+                            if symbol in all_tickers:
+                                tickers[symbol] = all_tickers[symbol]
+                elif provider is not None:
+                    # 回退：逐个获取
+                    for symbol in TRADE_SYMBOLS.keys():
+                        try:
+                            ticker = provider.get_ticker(symbol)
+                            tickers[symbol] = ticker
+                        except Exception:
+                            pass
+                else:
+                    for symbol in TRADE_SYMBOLS.keys():
                         tickers[symbol] = {'last': 45000.0 + (cycle_id % 1000)}
-                except Exception:
-                    pass  # 静默处理失败
+            except Exception as e:
+                # 批量获取失败，回退到逐个获取
+                logger.debug(f"[scan] 批量获取价格失败，回退到逐个获取: {e}")
+                for symbol in TRADE_SYMBOLS.keys():
+                    try:
+                        if provider is not None:
+                            ticker = provider.get_ticker(symbol)
+                            tickers[symbol] = ticker
+                    except Exception:
+                        pass
             
             price_fetch_time = time.time() - price_fetch_start
             scan_price_ok = len(tickers)  # 记录价格获取成功数量
+            
+            # 🔥 DEBUG: 打印价格获取耗时
+            print(f"   ⏱️ [DEBUG] 价格获取耗时: {price_fetch_time:.2f}s (批量模式)")
+            
+            # 🔥 Mark-to-Market: 使用实时价格更新模拟持仓的浮动盈亏
+            # 注意：MTM 详细日志已在 balance_syncer（第30秒）打印，这里只更新缓存
+            mtm_start = time.perf_counter()
+            if run_mode in ('paper', 'sim', 'paper_on_real') and tickers:
+                try:
+                    mtm_result = mark_to_market_paper_positions(tickers, leverage=max_lev)
+                    if mtm_result['positions_updated'] > 0:
+                        # 🔥 更新 preflight_cache（不打印，避免重复）
+                        _mtm_equity = mtm_result['new_equity']
+                        _mtm_used_margin = mtm_result['total_used_margin']
+                        _mtm_notional = mtm_result['total_notional']
+                        _max_allowed = _mtm_equity * 0.10
+                        _can_open = _mtm_used_margin < _max_allowed
+                        _remaining = max(0, _max_allowed - _mtm_used_margin)
+                        
+                        preflight_cache.update(
+                            _can_open, _remaining, _mtm_equity,
+                            "OK" if _can_open else f"已用保证金超限 ({_mtm_used_margin:.2f}/{_max_allowed:.2f})",
+                            total_notional=_mtm_notional, total_margin=_mtm_used_margin
+                        )
+                        
+                        # 🔥 重新获取 preflight_status 以使用最新值
+                        preflight_status = preflight_cache.get_status()
+                        scan_risk_status = "可开新主仓" if preflight_status['can_open_new'] else "仅允许对冲仓"
+                except Exception as e:
+                    logger.warning(f"[MTM] 更新失败: {e}")
+            mtm_cost = time.perf_counter() - mtm_start
+            print(f"   ⏱️ [DEBUG] MTM更新耗时: {mtm_cost:.2f}s")
             
             # 🔥 收线确认模式：计算上一分钟的K线时间戳
             # 例如：10:06:00 触发 -> 期望的已收线K线时间戳为 10:05:00.000
@@ -1474,7 +1743,6 @@ def main():
                 return symbol, tf, None, False, last_error
             
             # 构建任务列表：所有币种 × 所有到期周期
-            fetch_tasks = []
             current_symbols = list(TRADE_SYMBOLS.keys())
             
             # 🔥 优先处理待初始化的币种（上一轮失败的）
@@ -1483,91 +1751,150 @@ def main():
                 if pending_symbols:
                     logger.info(f"[scan] 发现 {len(pending_symbols)} 个待初始化币种，优先处理")
             
-            # 使用 ThreadPoolExecutor 并行拉取
             import pandas as pd
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                for symbol in current_symbols:
-                    for tf in due_timeframes:
-                        fetch_tasks.append(executor.submit(fetch_ohlcv_task, symbol, tf))
+            
+            # ============================================================
+            # 🔥 异步并发获取（推荐）vs 同步串行获取
+            # ============================================================
+            use_async_fetcher = ASYNC_FETCHER_AVAILABLE and os.getenv("USE_ASYNC_FETCHER", "true").lower() == "true"
+            
+            if use_async_fetcher:
+                # 🔥 异步并发模式：真正的并发，耗时 < 1 秒
+                logger.debug("[scan] 使用异步并发获取模式")
                 
-                # 等待所有结果
-                for future in as_completed(fetch_tasks):
-                    try:
-                        sym, tf, ohlcv_data, is_stale, error = future.result()
+                # 构建异步任务列表
+                async_tasks = [
+                    (symbol, tf, 50)  # (symbol, timeframe, limit)
+                    for symbol in current_symbols
+                    for tf in due_timeframes
+                ]
+                
+                # 获取 API 凭证
+                api_key = os.getenv("OKX_API_KEY", "")
+                api_secret = os.getenv("OKX_API_SECRET", "")
+                passphrase = os.getenv("OKX_API_PASSPHRASE", "")
+                sandbox = os.getenv("OKX_SANDBOX", "false").lower() == "true"
+                
+                # 执行异步批量获取
+                async_results = fetch_batch_ohlcv_sync(
+                    tasks=async_tasks,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    passphrase=passphrase,
+                    sandbox=sandbox,
+                    market_type="swap",
+                    max_concurrent=20,
+                )
+                
+                # 处理异步结果
+                for (sym, tf), ohlcv_data in async_results.items():
+                    if ohlcv_data and len(ohlcv_data) > 0:
+                        # 计算该周期的期望K线时间戳
+                        tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
+                        expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
+                        latest_candle_ts = ohlcv_data[-1][0]
+                        is_lag = latest_candle_ts < expected_tf_ts
+                        is_stale = False
                         
-                        if error:
-                            logger.warning(f"[scan] K线获取失败 {sym} {tf}: {error}")
-                            fetch_failed_list.append((sym, tf))
-                            continue
+                        if is_lag:
+                            ohlcv_lag_count += 1
                         
-                        if ohlcv_data and len(ohlcv_data) > 0:
-                            # 🔥 计算该周期的期望K线时间戳
-                            tf_ms = 60 * 1000  # 默认1分钟
-                            if tf == '3m':
-                                tf_ms = 3 * 60 * 1000
-                            elif tf == '5m':
-                                tf_ms = 5 * 60 * 1000
-                            elif tf == '15m':
-                                tf_ms = 15 * 60 * 1000
-                            elif tf == '30m':
-                                tf_ms = 30 * 60 * 1000
-                            elif tf == '1h':
-                                tf_ms = 60 * 60 * 1000
+                        # 转换为 DataFrame
+                        df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                        
+                        # 存入预加载数据
+                        if sym not in preloaded_data:
+                            preloaded_data[sym] = {}
+                        preloaded_data[sym][tf] = df
+                        
+                        if sym not in ohlcv_data_dict:
+                            ohlcv_data_dict[sym] = {}
+                        ohlcv_data_dict[sym][tf] = ohlcv_data
+                        
+                        if sym not in ohlcv_stale_dict:
+                            ohlcv_stale_dict[sym] = {}
+                        ohlcv_stale_dict[sym][tf] = is_stale
+                        
+                        if sym not in ohlcv_lag_dict:
+                            ohlcv_lag_dict[sym] = {}
+                        ohlcv_lag_dict[sym][tf] = is_lag
+                        
+                        upsert_ohlcv(sym, tf, ohlcv_data)
+                        ohlcv_ok_count += 1
+                    else:
+                        fetch_failed_list.append((sym, tf))
+            
+            else:
+                # 🔥 同步串行模式（旧逻辑，作为回退）
+                logger.debug("[scan] 使用同步串行获取模式")
+                fetch_tasks = []
+                
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    for symbol in current_symbols:
+                        for tf in due_timeframes:
+                            fetch_tasks.append(executor.submit(fetch_ohlcv_task, symbol, tf))
+                    
+                    # 等待所有结果
+                    for future in as_completed(fetch_tasks):
+                        try:
+                            sym, tf, ohlcv_data, is_stale, error = future.result()
                             
-                            # 期望的已收线K线时间戳 = 当前分钟向下取整到该周期 - 该周期时长
-                            expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
+                            if error:
+                                logger.warning(f"[scan] K线获取失败 {sym} {tf}: {error}")
+                                fetch_failed_list.append((sym, tf))
+                                continue
                             
-                            # 检查数据是否滞后
-                            latest_candle_ts = ohlcv_data[-1][0]
-                            is_lag = latest_candle_ts < expected_tf_ts
-                            
-                            if is_lag:
-                                ohlcv_lag_count += 1
-                                logger.debug(f"[scan-skip] reason=data_lag symbol={sym} tf={tf} current_ts={latest_candle_ts} expected={expected_tf_ts}")
-                            
-                            # 🔥 修复：不去除最后一根K线，保持与旧版系统一致
-                            # 策略 check_signals() 使用 df.iloc[-1] 作为"当前K线"
-                            # 如果去除最后一根，会导致信号判断的K线关系发生偏移
-                            # 旧版系统（app的备份.txt）的 fetch_klines() 也是传入全量数据
-                            df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                            # 🔥 添加时间戳转换（与旧版一致）
-                            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                            clean_df = df.copy()  # 不去除最后一根
-                            
-                            # 存入预加载数据（保持原有变量名兼容）
-                            if sym not in preloaded_data:
-                                preloaded_data[sym] = {}
-                            preloaded_data[sym][tf] = clean_df
-                            
-                            # 兼容原有逻辑的数据结构
-                            if sym not in ohlcv_data_dict:
-                                ohlcv_data_dict[sym] = {}
-                            ohlcv_data_dict[sym][tf] = ohlcv_data  # 原始数据用于 upsert
-                            
-                            if sym not in ohlcv_stale_dict:
-                                ohlcv_stale_dict[sym] = {}
-                            ohlcv_stale_dict[sym][tf] = is_stale
-                            
-                            if sym not in ohlcv_lag_dict:
-                                ohlcv_lag_dict[sym] = {}
-                            ohlcv_lag_dict[sym][tf] = is_lag
-                            
-                            # 持久化到数据库
-                            upsert_ohlcv(sym, tf, ohlcv_data)
-                            ohlcv_ok_count += 1
-                            if is_stale:
-                                ohlcv_stale_count += 1
-                        else:
-                            # 数据为空
-                            fetch_failed_list.append((sym, tf))
-                    except Exception as e:
-                        logger.error(f"并行拉取结果处理失败: {e}")
+                            if ohlcv_data and len(ohlcv_data) > 0:
+                                # 计算该周期的期望K线时间戳
+                                tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
+                                expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
+                                latest_candle_ts = ohlcv_data[-1][0]
+                                is_lag = latest_candle_ts < expected_tf_ts
+                                
+                                if is_lag:
+                                    ohlcv_lag_count += 1
+                                    logger.debug(f"[scan-skip] reason=data_lag symbol={sym} tf={tf}")
+                                
+                                df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                                
+                                if sym not in preloaded_data:
+                                    preloaded_data[sym] = {}
+                                preloaded_data[sym][tf] = df
+                                
+                                if sym not in ohlcv_data_dict:
+                                    ohlcv_data_dict[sym] = {}
+                                ohlcv_data_dict[sym][tf] = ohlcv_data
+                                
+                                if sym not in ohlcv_stale_dict:
+                                    ohlcv_stale_dict[sym] = {}
+                                ohlcv_stale_dict[sym][tf] = is_stale
+                                
+                                if sym not in ohlcv_lag_dict:
+                                    ohlcv_lag_dict[sym] = {}
+                                ohlcv_lag_dict[sym][tf] = is_lag
+                                
+                                upsert_ohlcv(sym, tf, ohlcv_data)
+                                ohlcv_ok_count += 1
+                                if is_stale:
+                                    ohlcv_stale_count += 1
+                            else:
+                                fetch_failed_list.append((sym, tf))
+                        except Exception as e:
+                            logger.error(f"并行拉取结果处理失败: {e}")
             
             fetch_cost = time.perf_counter() - fetch_start_time
             
             # 🔥 记录拉取失败的币种数量
             fail_info = f" | 失败: {len(fetch_failed_list)}" if fetch_failed_list else ""
             logger.info(f"[scan] 并行拉取完成 | 耗时: {fetch_cost:.2f}s | 触发时间: {now.strftime('%H:%M:%S')} | 成功: {ohlcv_ok_count}/{len(current_symbols) * len(due_timeframes)}{fail_info}")
+            
+            # 🔥 DEBUG: 打印数据获取耗时
+            print(f"   ⏱️ [DEBUG] 数据获取耗时: {fetch_cost:.2f}s")
+            
+            # 🔥 记录信号计算开始时间
+            signal_calc_start = time.perf_counter()
             
             # K线获取结果记录到DEBUG日志
             log_parts = [f"K线获取: {ohlcv_ok_count}/{len(current_symbols) * len(due_timeframes)}"]
@@ -1972,7 +2299,6 @@ def main():
                         if signal_action.upper() != main_side:
                             can_hedge, hedge_reason = hedge_manager.can_open_hedge(symbol)
                             if not can_hedge:
-                                logger.debug(f"{symbol} 无法开对冲仓: {hedge_reason}")
                                 continue
                             is_hedge_order = True
                     
@@ -1980,9 +2306,22 @@ def main():
                     position_pct = sub_position_pct if is_hedge_order else main_position_pct
                     # 使用预检查缓存的权益（零延迟）
                     _cached_equity = preflight_status['equity']
+                    
+                    # 🔥 修复：如果缓存的权益为0，直接从数据库读取
+                    if _cached_equity <= 0:
+                        _paper_bal = get_paper_balance()
+                        _cached_equity = float(_paper_bal.get('equity', 0) or 0) if _paper_bal else 0
+                        if _cached_equity <= 0:
+                            _cached_equity = float(_paper_bal.get('wallet_balance', 200) or 200) if _paper_bal else 200
+                        logger.warning(f"[Order Sizing] 预风控缓存权益为0，从数据库读取: ${_cached_equity:.2f}")
+                    
                     # 🔥 修复：position_size 是保证金，仓位价值 = 保证金 × 杠杆
                     margin = _cached_equity * position_pct if _cached_equity > 0 else base_position_size
                     position_value = margin * max_lev  # 仓位价值 = 保证金 × 杠杆
+                    
+                    # 🔥 调试：打印订单大小计算过程
+                    logger.info(f"[Order Sizing] 基数权益: ${_cached_equity:.2f} | 仓位比例: {position_pct*100:.2f}% | 保证金: ${margin:.2f} | 杠杆: {max_lev}x | 名义价值: ${position_value:.2f}")
+                    print(f"   📐 [Order Sizing] 权益=${_cached_equity:.2f} × {position_pct*100:.1f}% = 保证金${margin:.2f} × {max_lev}x = 名义价值${position_value:.2f}")
                     
                     order_type_str = "对冲单" if is_hedge_order else "主仓单"
                     
@@ -2025,7 +2364,6 @@ def main():
                     
                     # 🔥 预风控检查（使用预检查缓存，零延迟）
                     if not preflight_status['can_open_new'] and not is_hedge_order:
-                        logger.debug(f"{symbol} 预风控拦截: 仅允许对冲仓 ({preflight_status['check_reason']})")
                         plan_order = None
                         continue
                     
@@ -2035,11 +2373,6 @@ def main():
                 # 扫描摘要记录到DEBUG（统一输出在循环结束后）
                 logger.debug(f"[scan-tf] {timeframe} signals={scan_signals} orders={scan_orders}")
             
-                # 🔥 调试：打印 plan_order 状态
-                logger.info(f"[DEBUG] plan_order={plan_order is not None} | is_first_scan={is_first_scan_after_warmup} | tf={timeframe}")
-                if plan_order:
-                    print(f"   📋 plan_order: {plan_order.get('symbol')} {plan_order.get('side')} | is_first_scan={is_first_scan_after_warmup}")
-                
                 # 🔥 首次扫描跳过交易（预热后的第一次扫描只计算信号，不执行下单）
                 if is_first_scan_after_warmup and plan_order:
                     logger.info(f"[scan] 首次扫描跳过交易 | {plan_order.get('symbol')} {plan_order.get('side')} | 原因: 预热后首次扫描")
@@ -2080,8 +2413,6 @@ def main():
                             blocked_reasons.append("trading_disabled")
                         
                         can_execute_paper_order = len(blocked_reasons) == 0
-                        # 🔥 调试：打印 paper 模式下单条件
-                        logger.info(f"[DEBUG] paper模式: can_execute={can_execute_paper_order} | pause={pause_trading} | enable={enable_trading} | blocked={blocked_reasons}")
                     else:
                         # 未知模式
                         blocked_reasons.append(f"unknown_mode_{run_mode}")
@@ -2310,7 +2641,7 @@ def main():
                         # 使模拟持仓和余额缓存失效（如果有的话）
                         # 注意：这里不需要使交易所的缓存失效，因为paper模式不与交易所交互
                     except Exception as e:
-                        logger.error(f"模拟订单执行失败: {e}")
+                        logger.error(f"模拟订单执行失败: {e}", exc_info=True)
                         update_engine_status(last_error=str(e))
                         cycle_error_count += 1
                 elif plan_order is not None:
@@ -2327,6 +2658,10 @@ def main():
                     
                     # 记录模拟订单（仅日志）
                     logger.debug(f"模拟订单: {json.dumps(plan_order)} (run_mode: {run_mode}, pause_trading: {pause_trading}, allow_live: {control.get('allow_live')}) | 周期: {timeframe}")
+            
+            # 🔥 DEBUG: 打印信号计算耗时
+            signal_calc_cost = time.perf_counter() - signal_calc_start
+            print(f"   ⏱️ [DEBUG] 信号计算耗时: {signal_calc_cost:.2f}s")
             
             # 计算循环耗时
             cycle_time = int((time.time() - cycle_start_time) * 1000)

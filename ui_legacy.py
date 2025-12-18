@@ -351,11 +351,6 @@ def render_login(view_model, actions):
         # 🔥 炫酷登录页面样式
         st.markdown("""
         <style>
-        /* 隐藏 Streamlit 默认元素 */
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
-        
         /* 登录页面背景 */
         .login-container {
             background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
@@ -643,12 +638,50 @@ def render_login(view_model, actions):
         
         c1, c2, c3 = st.columns([1, 2, 1])
         with c2:
-            password_input = st.text_input("🔑 访问密码", type="password", placeholder="请输入访问密码", label_visibility="collapsed")
+            # 🔥 记住密码功能：使用 st_javascript 组件
+            # 注入 JavaScript 来处理 localStorage
+            st.markdown("""
+            <style>
+                /* 记住密码复选框右对齐 */
+                .remember-pwd-container {
+                    display: flex;
+                    justify-content: flex-end;
+                    margin-top: 5px;
+                    margin-bottom: 10px;
+                }
+                .remember-pwd-container label {
+                    color: #888;
+                    font-size: 12px;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # 🔥 检查 localStorage 中是否有保存的密码（通过 URL 参数传递）
+            saved_pwd = st.query_params.get("_sp", "")
+            
+            password_input = st.text_input(
+                "🔑 访问密码", 
+                type="password", 
+                placeholder="请输入访问密码", 
+                label_visibility="collapsed",
+                value=saved_pwd  # 如果有保存的密码，自动填充
+            )
+            
+            # 记住密码复选框（右对齐）
+            col_spacer, col_checkbox = st.columns([3, 1])
+            with col_checkbox:
+                remember_pwd = st.checkbox("记住密码", value=True, key="remember_password")
             
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("⚡ 进入系统", use_container_width=True):
                     # 忽略用户输入两端的意外空白字符后比较
                     if (password_input or '').strip() == ACCESS_PASSWORD:
+                        # 🔥 如果勾选了记住密码，保存到 URL 参数（下次访问时自动填充）
+                        if remember_pwd:
+                            st.query_params["_sp"] = (password_input or "").strip()
+                        else:
+                            if "_sp" in st.query_params:
+                                del st.query_params["_sp"]
                         st.session_state.logged_in = True
                         st.session_state.username = "admin"  # 默认用户
                         # P1修复: 记录登录时间用于会话超时
@@ -694,6 +727,55 @@ def render_login(view_model, actions):
         
         st.stop()  # 阻止未登录用户访问后续内容
 
+@st.fragment(run_every=5)
+def _render_sidebar_balance_fragment(actions, view_model):
+    """
+    🔥 侧边栏余额 Fragment - 每5秒自动刷新
+    
+    使用 @st.fragment(run_every=5) 实现局部自动刷新
+    只刷新余额显示，不影响其他组件
+    """
+    # 🔥 根据运行模式显示不同的余额
+    current_env_mode = st.session_state.get('env_mode', '💰 实盘')
+    
+    if current_env_mode == "🛰️ 实盘测试":
+        # 实盘测试模式: 从数据库读取模拟账户余额
+        try:
+            paper_balance = actions.get("get_paper_balance", lambda: {})()
+            if paper_balance and paper_balance.get('equity'):
+                equity_val = paper_balance.get('equity', 10000)
+                equity = f"${equity_val:,.2f}"
+                # 🔥 计算浮动盈亏
+                wallet_balance = paper_balance.get('wallet_balance', 0) or 0
+                unrealized_pnl = paper_balance.get('unrealized_pnl', 0) or 0
+                if wallet_balance > 0 and unrealized_pnl != 0:
+                    pnl_pct = (unrealized_pnl / wallet_balance) * 100
+                    delta_str = f"{unrealized_pnl:+.2f} ({pnl_pct:+.1f}%)"
+                else:
+                    delta_str = None
+            else:
+                equity_val = 10000.0
+                equity = "$10,000.00"
+                delta_str = None
+        except Exception:
+            equity_val = 10000.0
+            equity = "$10,000.00"
+            delta_str = None
+        
+        st.metric("模拟净值(USDT)", equity, delta=delta_str)
+        st.caption("📌 模拟账户余额(非真实资金)")
+    else:
+        # 实盘模式: 显示 OKX 真实余额
+        live_balance = st.session_state.get('live_balance', {})
+        if live_balance and live_balance.get('equity'):
+            equity = f"${live_balance.get('equity', 0):,.2f}"
+        else:
+            equity = view_model.get("equity", "----")
+        
+        st.metric("账户净值(USDT)", equity)
+        st.caption("💰 OKX 真实账户余额")
+
+
 def render_sidebar(view_model, actions):
     """渲染侧边栏"""
     with st.sidebar:
@@ -708,39 +790,8 @@ def render_sidebar(view_model, actions):
         # ============ 资产概览 ============
         st.markdown("## 💎 资产看板")
         
-        # 🔥 根据运行模式显示不同的余额
-        # 实盘测试模式 -> 显示模拟仓位余额
-        # 实盘模式 -> 显示 OKX 真实余额
-        current_env_mode = st.session_state.get('env_mode', '💰 实盘')
-        
-        if current_env_mode == "🛰️ 实盘测试":
-            # 实盘测试模式: 从数据库读取模拟账户余额
-            try:
-                paper_balance = actions.get("get_paper_balance", lambda: {})()
-                if paper_balance and paper_balance.get('equity'):
-                    equity_val = paper_balance.get('equity', 10000)
-                    equity = f"${equity_val:,.2f}"
-                else:
-                    # 默认模拟账户初始余额
-                    equity_val = 10000.0
-                    equity = "$10,000.00"
-            except Exception:
-                equity_val = 10000.0
-                equity = "$10,000.00"
-            
-            st.metric("模拟净值(USDT)", equity)
-            st.caption("📌 模拟账户余额(非真实资金)")
-        else:
-            # 实盘模式: 显示 OKX 真实余额
-            live_balance = st.session_state.get('live_balance', {})
-            if live_balance and live_balance.get('equity'):
-                equity = f"${live_balance.get('equity', 0):,.2f}"
-            else:
-                # 回退到 view_model 中的数据
-                equity = view_model.get("equity", "----")
-            
-            st.metric("账户净值(USDT)", equity)
-            st.caption("💰 OKX 真实账户余额")
+        # 🔥 使用 fragment 实现余额自动刷新
+        _render_sidebar_balance_fragment(actions, view_model)
         
         # 初始化必要的session_state变量
         if "strategy_module" not in st.session_state:
@@ -2139,7 +2190,7 @@ def render_dashboard(view_model, actions):
                             "方向": pos.get("side", "LONG"),
                             "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",  # 🔥 显示保证金
                             "名义价值": f"${pos.get('size', 0):.2f}",  # 🔥 改名为名义价值
-                            "入场价": f"${pos.get('entry_price', 0):.4f}",
+                            "入场价": f"${pos.get('entry_price', 0):.8g}",  # 🔥 使用 .8g 格式，自动处理小数位
                             "入场时间": pos.get("entry_time", "-"),
                             "浮盈": f"${pos.get('pnl', 0):+.2f}"
                         })
@@ -2154,7 +2205,7 @@ def render_dashboard(view_model, actions):
                                 "方向": pos.get("side", "SHORT"),
                                 "保证金": f"${pos.get('margin', pos.get('size', 0)/20):.2f}",  # 🔥 显示保证金
                                 "名义价值": f"${pos.get('size', 0):.2f}",  # 🔥 改名为名义价值
-                                "入场价": f"${pos.get('entry_price', 0):.4f}",
+                                "入场价": f"${pos.get('entry_price', 0):.8g}",  # 🔥 使用 .8g 格式，自动处理小数位
                                 "入场时间": pos.get("entry_time", "-"),
                                 "浮盈": f"${pos.get('pnl', 0):+.2f}"
                             })
@@ -2328,6 +2379,116 @@ def render_main(view_model, actions):
         st.markdown(f'<style>{css_content}</style>', unsafe_allow_html=True)
     except Exception as e:
         st.warning(f"CSS文件加载失败: {e}")
+    
+    # 🌸 樱花飘落粒子效果（斜向飘落，柔和发光）
+    st.markdown("""
+    <style>
+    /* 樱花容器 */
+    .sakura-container {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+    
+    /* 樱花花瓣 - 真实花瓣形状 + 柔和发光 */
+    .sakura {
+        position: absolute;
+        top: -30px;
+        width: 12px;
+        height: 12px;
+        background: linear-gradient(135deg, #ffc0cb 0%, #ffb6c1 40%, #ff69b4 100%);
+        border-radius: 50% 0 50% 50%;
+        box-shadow: 0 0 8px rgba(255, 182, 193, 0.6), 0 0 15px rgba(255, 105, 180, 0.3);
+        opacity: 0.35;
+        animation: sakura-drift linear infinite;
+    }
+    
+    /* 第二层花瓣 - 更小更淡 */
+    .sakura::before {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 60%;
+        height: 60%;
+        background: rgba(255, 255, 255, 0.4);
+        border-radius: 50% 0 50% 50%;
+    }
+    
+    /* 斜向飘落 + 旋转 + 摇摆 */
+    @keyframes sakura-drift {
+        0% {
+            transform: translateY(0) translateX(0) rotate(0deg);
+            opacity: 0;
+        }
+        5% {
+            opacity: 0.35;
+        }
+        25% {
+            transform: translateY(25vh) translateX(8vw) rotate(90deg);
+        }
+        50% {
+            transform: translateY(50vh) translateX(15vw) rotate(180deg);
+            opacity: 0.3;
+        }
+        75% {
+            transform: translateY(75vh) translateX(22vw) rotate(270deg);
+        }
+        95% {
+            opacity: 0.2;
+        }
+        100% {
+            transform: translateY(105vh) translateX(30vw) rotate(360deg);
+            opacity: 0;
+        }
+    }
+    
+    /* 25片樱花 - 错落分布 */
+    .sakura:nth-child(1) { left: 2%; width: 10px; height: 10px; animation-duration: 15s; animation-delay: 0s; }
+    .sakura:nth-child(2) { left: 10%; width: 8px; height: 8px; animation-duration: 18s; animation-delay: 2s; opacity: 0.3; }
+    .sakura:nth-child(3) { left: 18%; width: 12px; height: 12px; animation-duration: 14s; animation-delay: 4s; }
+    .sakura:nth-child(4) { left: 26%; width: 9px; height: 9px; animation-duration: 17s; animation-delay: 1s; opacity: 0.25; }
+    .sakura:nth-child(5) { left: 34%; width: 11px; height: 11px; animation-duration: 16s; animation-delay: 3s; }
+    .sakura:nth-child(6) { left: 42%; width: 7px; height: 7px; animation-duration: 19s; animation-delay: 5s; opacity: 0.28; }
+    .sakura:nth-child(7) { left: 50%; width: 10px; height: 10px; animation-duration: 15s; animation-delay: 6s; }
+    .sakura:nth-child(8) { left: 58%; width: 8px; height: 8px; animation-duration: 18s; animation-delay: 7s; opacity: 0.32; }
+    .sakura:nth-child(9) { left: 66%; width: 13px; height: 13px; animation-duration: 14s; animation-delay: 8s; }
+    .sakura:nth-child(10) { left: 74%; width: 9px; height: 9px; animation-duration: 17s; animation-delay: 9s; opacity: 0.26; }
+    .sakura:nth-child(11) { left: 82%; width: 11px; height: 11px; animation-duration: 16s; animation-delay: 10s; }
+    .sakura:nth-child(12) { left: 90%; width: 8px; height: 8px; animation-duration: 19s; animation-delay: 11s; opacity: 0.3; }
+    .sakura:nth-child(13) { left: 6%; width: 10px; height: 10px; animation-duration: 20s; animation-delay: 12s; }
+    .sakura:nth-child(14) { left: 22%; width: 7px; height: 7px; animation-duration: 16s; animation-delay: 13s; opacity: 0.28; }
+    .sakura:nth-child(15) { left: 38%; width: 12px; height: 12px; animation-duration: 15s; animation-delay: 14s; }
+    .sakura:nth-child(16) { left: 54%; width: 9px; height: 9px; animation-duration: 18s; animation-delay: 15s; opacity: 0.32; }
+    .sakura:nth-child(17) { left: 70%; width: 10px; height: 10px; animation-duration: 17s; animation-delay: 16s; }
+    .sakura:nth-child(18) { left: 86%; width: 8px; height: 8px; animation-duration: 14s; animation-delay: 17s; opacity: 0.25; }
+    .sakura:nth-child(19) { left: 14%; width: 11px; height: 11px; animation-duration: 19s; animation-delay: 18s; }
+    .sakura:nth-child(20) { left: 30%; width: 9px; height: 9px; animation-duration: 16s; animation-delay: 19s; opacity: 0.3; }
+    .sakura:nth-child(21) { left: 46%; width: 10px; height: 10px; animation-duration: 15s; animation-delay: 20s; }
+    .sakura:nth-child(22) { left: 62%; width: 7px; height: 7px; animation-duration: 18s; animation-delay: 21s; opacity: 0.28; }
+    .sakura:nth-child(23) { left: 78%; width: 12px; height: 12px; animation-duration: 17s; animation-delay: 22s; }
+    .sakura:nth-child(24) { left: 94%; width: 8px; height: 8px; animation-duration: 14s; animation-delay: 23s; opacity: 0.32; }
+    .sakura:nth-child(25) { left: 4%; width: 9px; height: 9px; animation-duration: 20s; animation-delay: 24s; }
+    </style>
+    
+    <!-- 樱花花瓣 -->
+    <div class="sakura-container">
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div><div class="sakura"></div><div class="sakura"></div>
+        <div class="sakura"></div>
+    </div>
+    """, unsafe_allow_html=True)
     
     # 渲染侧边栏
     render_sidebar(view_model, actions)

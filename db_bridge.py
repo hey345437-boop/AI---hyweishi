@@ -535,6 +535,7 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                 qty REAL DEFAULT 0.0,
                 entry_price REAL DEFAULT 0.0,
                 unrealized_pnl REAL DEFAULT 0.0,
+                created_at INTEGER DEFAULT 0,
                 updated_at INTEGER DEFAULT 0,
                 signal_type TEXT DEFAULT NULL,
                 PRIMARY KEY (symbol, pos_side)
@@ -548,6 +549,7 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                 qty REAL DEFAULT 0.0,
                 entry_price REAL DEFAULT 0.0,
                 unrealized_pnl REAL DEFAULT 0.0,
+                created_at INTEGER DEFAULT 0,
                 updated_at INTEGER DEFAULT 0,
                 signal_type TEXT DEFAULT NULL,
                 PRIMARY KEY (symbol, pos_side)
@@ -634,6 +636,19 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                             cursor.execute("UPDATE paper_balance SET wallet_balance = equity WHERE wallet_balance IS NULL OR wallet_balance = 200.0")
                     except Exception:
                         pass
+        
+        # === 列迁移：为旧 paper_positions 表添加 created_at 列（入场时间，毫秒精度）===
+        if db_kind == "sqlite":
+            cursor.execute("PRAGMA table_info(paper_positions)")
+            pp_existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            if 'created_at' not in pp_existing_columns:
+                try:
+                    cursor.execute("ALTER TABLE paper_positions ADD COLUMN created_at INTEGER DEFAULT 0")
+                    # 用现有的 updated_at 值初始化 created_at（旧数据兼容）
+                    cursor.execute("UPDATE paper_positions SET created_at = updated_at WHERE created_at = 0 OR created_at IS NULL")
+                except Exception:
+                    pass
         
         # 初始化paper_balance表（包含标准金融字段）
         if db_kind == "postgres":
@@ -1309,8 +1324,19 @@ def get_paper_position(symbol: str, pos_side: str, db_config: Optional[Dict[str,
         conn.close()
 
 
-def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = None, entry_price: Optional[float] = None, unrealized_pnl: Optional[float] = None, updated_at: Optional[int] = None, db_config: Optional[Dict[str, Any]] = None) -> None:
-    """更新或插入模拟持仓"""
+def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = None, entry_price: Optional[float] = None, unrealized_pnl: Optional[float] = None, updated_at: Optional[int] = None, created_at: Optional[int] = None, db_config: Optional[Dict[str, Any]] = None) -> None:
+    """更新或插入模拟持仓
+    
+    Args:
+        symbol: 交易对
+        pos_side: 仓位方向 (long/short)
+        qty: 持仓数量
+        entry_price: 入场价格
+        unrealized_pnl: 未实现盈亏
+        updated_at: 更新时间戳（秒）
+        created_at: 🔥 入场时间戳（毫秒精度），仅在新建仓位时设置
+        db_config: 数据库配置
+    """
     conn, db_kind = _get_connection(db_config)
     try:
         cursor = conn.cursor()
@@ -1320,7 +1346,7 @@ def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = Non
         
         # 准备更新数据
         if current_pos:
-            # 更新现有记录
+            # 更新现有记录（不更新 created_at，保持入场时间不变）
             if qty is not None:
                 current_pos['qty'] = qty
             if entry_price is not None:
@@ -1362,6 +1388,8 @@ def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = Non
         else:
             # 插入新记录
             current_ts = int(time.time())
+            # 🔥 入场时间使用毫秒精度，如果未提供则使用当前时间的毫秒
+            entry_ts_ms = created_at if created_at else int(time.time() * 1000)
             if db_kind == "postgres":
                 cursor.execute('''
                 INSERT INTO paper_positions (symbol, pos_side, qty, entry_price, unrealized_pnl, created_at, updated_at) 
@@ -1372,7 +1400,7 @@ def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = Non
                     qty or 0.0,
                     entry_price or 0.0,
                     unrealized_pnl or 0.0,
-                    current_ts,  # 🔥 添加 created_at
+                    entry_ts_ms,
                     updated_at or current_ts
                 ))
             else:
@@ -1385,7 +1413,7 @@ def update_paper_position(symbol: str, pos_side: str, qty: Optional[float] = Non
                     qty or 0.0,
                     entry_price or 0.0,
                     unrealized_pnl or 0.0,
-                    current_ts,  # 🔥 添加 created_at
+                    entry_ts_ms,
                     updated_at or current_ts
                 ))
         
