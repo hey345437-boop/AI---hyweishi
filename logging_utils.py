@@ -155,7 +155,8 @@ def render_scan_block(
     signals: list = None,
     orders: list = None,
     elapsed_sec: float = 0.0,
-    logger: logging.Logger = None
+    logger: logging.Logger = None,
+    debug_timing: dict = None
 ):
     """
     统一的扫描块状摘要输出函数
@@ -232,6 +233,19 @@ def render_scan_block(
     
     # 扫描结束块（1行）
     lines.append(f"✅ 本轮扫描完成 | 耗时: {elapsed_sec:.2f}s | 信号: {len(signals)} | 订单: {len(orders)}")
+    
+    # DEBUG耗时信息（放在本轮扫描完成之后）
+    if debug_timing:
+        timing_parts = []
+        if 'price_fetch' in debug_timing:
+            timing_parts.append(f"价格: {debug_timing['price_fetch']:.2f}s")
+        if 'data_fetch' in debug_timing:
+            timing_parts.append(f"数据: {debug_timing['data_fetch']:.2f}s")
+        if 'signal_calc' in debug_timing:
+            timing_parts.append(f"信号: {debug_timing['signal_calc']:.2f}s")
+        if timing_parts:
+            lines.append(f"   ⏱️ [DEBUG] {' | '.join(timing_parts)}")
+    
     lines.append(f"{'='*70}")
     
     # 输出到控制台（唯一出口）

@@ -3,6 +3,9 @@
 import pandas as pd
 import numpy as np
 
+# 🔥 导入 Numba 加速函数（从 strategy_v2 共享）
+from strategy_v2 import _ema_numba, _rma_numba, _bcwsma_numba, _wilder_smoothing_numba
+
 class TradingStrategyV1:
     """
     趋势1.3策略引擎：包含双MACD策略 + 顶底系统 + SMC摆动订单块
@@ -49,48 +52,22 @@ class TradingStrategyV1:
             print(f"✅ 顶底模式已设置为: {mode}")
     
     def calculate_ema(self, series, period):
-        """TradingView精确EMA计算 - 使用前N个点的SMA作为初始值"""
-        alpha = 2.0 / (period + 1.0)
-        result = np.zeros(len(series))
-        
-        # 使用前N个点的简单移动平均作为初始值
-        result[period-1] = series.iloc[:period].mean()
-    
-        for i in range(period, len(series)):
-            result[i] = alpha * series.iloc[i] + (1 - alpha) * result[i-1]
-    
+        """TradingView精确EMA计算 - 使用Numba加速"""
+        values = series.values.astype(np.float64)
+        result = _ema_numba(values, period)
         return pd.Series(result, index=series.index)
     
     def calculate_rma(self, series, period):
-        """RMA 计算（Wilder's smoothing）- 与 TradingView ta.rma 完全一致"""
-        # 使用 Wilder's Smoothing 方法实现 RMA
-        alpha = 1.0 / period
-        result = np.zeros(len(series))
-        
-        # 处理 NaN 值，使用 nz 逻辑（将 NaN 替换为 0）
-        clean_series = series.fillna(0)
-        
-        # 初始化：第一个有效值为前 N 个值的简单平均
-        result[period-1] = clean_series.iloc[:period].mean()
-        
-        # 递归计算
-        for i in range(period, len(series)):
-            result[i] = alpha * clean_series.iloc[i] + (1 - alpha) * result[i-1]
-        
+        """RMA 计算（Wilder's smoothing）- 使用Numba加速"""
+        values = series.fillna(0).values.astype(np.float64)
+        result = _rma_numba(values, period)
         return pd.Series(result, index=series.index)
     
     def bcwsma(self, series, length, m):
-        """自定义 bcwsma (用于 KDJ) - 正确处理 NaN 值"""
-        # 处理 NaN 值，使用 nz 逻辑（将 NaN 替换为 0）
-        clean_series = series.fillna(0)
-        res = np.zeros(len(clean_series))
-        res[0] = clean_series.iloc[0]
-        arr = clean_series.values
-        for i in range(1, len(clean_series)):
-            prev = res[i-1]
-            current = arr[i]
-            res[i] = (m * current + (length - m) * prev) / length
-        return pd.Series(res, index=series.index)
+        """自定义 bcwsma (用于 KDJ) - 使用Numba加速"""
+        values = series.fillna(0).values.astype(np.float64)
+        result = _bcwsma_numba(values, length, m)
+        return pd.Series(result, index=series.index)
     
     def calculate_indicators(self, df):
         """
@@ -151,7 +128,7 @@ class TradingStrategyV1:
         df['obv_minus'] = minus_bottom
         df['obv_adx'] = adx_bottom
         
-        # === 4. ADX (Wilder's Smoothing) ===
+        # === 4. ADX (Wilder's Smoothing) - 使用Numba加速 ===
         len_adx = 14
         
         tr1 = df['high'] - df['low']
@@ -159,37 +136,23 @@ class TradingStrategyV1:
         tr3 = abs(df['low'] - df['close'].shift(1))
         TrueRange = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         
-        high_diff = df['high'].diff()
-        low_diff = df['low'].diff()
+        high_diff = df['high'].diff().fillna(0)
+        low_diff = df['low'].diff().fillna(0)
         DirectionalMovementPlus = np.where(
             (high_diff > -low_diff) & (high_diff > 0),
             high_diff,
             0
-        )
+        ).astype(np.float64)
         DirectionalMovementMinus = np.where(
             (-low_diff > high_diff) & (-low_diff > 0),
             -low_diff,
             0
-        )
+        ).astype(np.float64)
         
-        SmoothedTrueRange = np.zeros(len(df))
-        SmoothedDirectionalMovementPlus = np.zeros(len(df))
-        SmoothedDirectionalMovementMinus = np.zeros(len(df))
-        
-        SmoothedTrueRange[len_adx-1] = TrueRange[:len_adx].mean()
-        SmoothedDirectionalMovementPlus[len_adx-1] = DirectionalMovementPlus[:len_adx].mean()
-        SmoothedDirectionalMovementMinus[len_adx-1] = DirectionalMovementMinus[:len_adx].mean()
-        
-        for i in range(len_adx, len(df)):
-            SmoothedTrueRange[i] = (SmoothedTrueRange[i-1] - 
-                                    (SmoothedTrueRange[i-1] / len_adx) + 
-                                    TrueRange.iloc[i])
-            SmoothedDirectionalMovementPlus[i] = (SmoothedDirectionalMovementPlus[i-1] - 
-                                                  (SmoothedDirectionalMovementPlus[i-1] / len_adx) + 
-                                                  DirectionalMovementPlus[i])
-            SmoothedDirectionalMovementMinus[i] = (SmoothedDirectionalMovementMinus[i-1] - 
-                                                   (SmoothedDirectionalMovementMinus[i-1] / len_adx) + 
-                                                   DirectionalMovementMinus[i])
+        # 🔥 使用 Numba 加速的 Wilder's Smoothing
+        tr_values = TrueRange.fillna(0).values.astype(np.float64)
+        SmoothedTrueRange, SmoothedDirectionalMovementPlus, SmoothedDirectionalMovementMinus = \
+            _wilder_smoothing_numba(tr_values, DirectionalMovementPlus, DirectionalMovementMinus, len_adx)
         
         SmoothedTrueRange = pd.Series(SmoothedTrueRange, index=df.index).replace(0, 1e-10)
         DIPlus = 100 * SmoothedDirectionalMovementPlus / SmoothedTrueRange
@@ -197,9 +160,10 @@ class TradingStrategyV1:
         
         DX = 100 * abs(DIPlus - DIMinus) / (DIPlus + DIMinus).replace(0, 1)
         
-        df['trend_adx'] = DX.rolling(window=len_adx).apply(
-            lambda x: np.average(x, weights=np.arange(1, len_adx + 1)), raw=True
-        )
+        # 🔥 使用 Numba 加速的 WMA
+        from strategy_v2 import _wma_numba
+        dx_values = DX.fillna(0).values.astype(np.float64)
+        df['trend_adx'] = pd.Series(_wma_numba(dx_values, len_adx), index=df.index)
         df['adx_slope'] = df['trend_adx'].diff()
         
         atr = pd.Series(SmoothedTrueRange, index=df.index)
@@ -266,47 +230,30 @@ class TradingStrategyV1:
         df['parsed_high'] = parsedHigh
         df['parsed_low'] = parsedLow
         
-        # Leg函数
-        leg = np.zeros(len(df), dtype=int)
+        # 🔥 使用 Numba 加速的摆动点检测
+        from strategy_v2 import _swing_detection_numba
+        parsed_high_arr = parsedHigh.astype(np.float64) if isinstance(parsedHigh, np.ndarray) else parsedHigh
+        parsed_low_arr = parsedLow.astype(np.float64) if isinstance(parsedLow, np.ndarray) else parsedLow
         
-        for i in range(swing_length, len(df)):
-            recent_highs = parsedHigh[i-swing_length:i]
-            recent_lows = parsedLow[i-swing_length:i]
-            
-            if parsedHigh[i-swing_length] > max(recent_highs):
-                leg[i] = 0  # BEARISH_LEG
-            elif parsedLow[i-swing_length] < min(recent_lows):
-                leg[i] = 1  # BULLISH_LEG
-            else:
-                leg[i] = leg[i-1] if i > 0 else 0
+        leg, swing_high_bar, swing_low_bar, swing_high_price, swing_low_price, swing_high_index, swing_low_index = \
+            _swing_detection_numba(parsed_high_arr, parsed_low_arr, swing_length)
         
         df['leg'] = leg
+        df['swing_high_bar'] = swing_high_bar
+        df['swing_low_bar'] = swing_low_bar
+        df['swing_high_price'] = swing_high_price
+        df['swing_low_price'] = swing_low_price
+        df['swing_high_index'] = swing_high_index
+        df['swing_low_index'] = swing_low_index
         
-        # 摆动点检测
-        df['swing_high_bar'] = False
-        df['swing_low_bar'] = False
-        df['swing_high_price'] = np.nan
-        df['swing_low_price'] = np.nan
-        df['swing_high_index'] = -1
-        df['swing_low_index'] = -1
-        
-        for i in range(swing_length + 1, len(df)):
-            leg_changed = leg[i] != leg[i-1]
-            
-            if leg_changed:
-                if leg[i-1] == 1 and leg[i] == 0:
-                    swing_idx = i - swing_length
-                    if swing_idx >= 0:
-                        df.loc[df.index[swing_idx], 'swing_high_bar'] = True
-                        df.loc[df.index[swing_idx], 'swing_high_price'] = df['high'].iloc[swing_idx]
-                        df.loc[df.index[swing_idx], 'swing_high_index'] = swing_idx
-                
-                elif leg[i-1] == 0 and leg[i] == 1:
-                    swing_idx = i - swing_length
-                    if swing_idx >= 0:
-                        df.loc[df.index[swing_idx], 'swing_low_bar'] = True
-                        df.loc[df.index[swing_idx], 'swing_low_price'] = df['low'].iloc[swing_idx]
-                        df.loc[df.index[swing_idx], 'swing_low_index'] = swing_idx
+        # 🔥 修复：swing_high_price 需要使用原始 high 值
+        high_values = df['high'].values
+        low_values = df['low'].values
+        for i in range(len(df)):
+            if swing_high_bar[i]:
+                df.iloc[i, df.columns.get_loc('swing_high_price')] = high_values[i]
+            if swing_low_bar[i]:
+                df.iloc[i, df.columns.get_loc('swing_low_price')] = low_values[i]
         
         # 订单块检测
         df['bullish_ob'] = False

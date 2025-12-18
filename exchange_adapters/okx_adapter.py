@@ -832,6 +832,11 @@ class OKXAdapter(ExchangeAdapter):
                 logger.info(f"仓位模式已经是目标模式: {mode}")
                 self._position_mode_set = True
                 return True
+            # 50120: API Key 没有权限，在模拟模式下可以忽略
+            if '50120' in str(e):
+                logger.warning(f"API Key 无权限设置仓位模式（模拟模式可忽略）: {e}")
+                self._position_mode_set = True  # 标记为已设置，避免重复尝试
+                return True
             logger.error(f"设置仓位模式失败: {e}")
             return False
         except Exception as e:

@@ -2,6 +2,183 @@
 
 import pandas as pd
 import numpy as np
+from numba import njit
+
+# ============================================================
+# 🔥 Numba 加速函数（模块级别，避免重复编译）
+# ============================================================
+
+@njit(cache=True)
+def _ema_numba(values: np.ndarray, period: int) -> np.ndarray:
+    """Numba加速的EMA计算 - 与TradingView一致"""
+    n = len(values)
+    result = np.zeros(n)
+    alpha = 2.0 / (period + 1.0)
+    
+    if n < period:
+        result[0] = values[0]
+        for i in range(1, n):
+            result[i] = alpha * values[i] + (1 - alpha) * result[i-1]
+    else:
+        # 前period个点使用累积SMA
+        cumsum = 0.0
+        for i in range(period):
+            cumsum += values[i]
+            result[i] = cumsum / (i + 1)
+        
+        # 从period开始递归计算EMA
+        for i in range(period, n):
+            result[i] = alpha * values[i] + (1 - alpha) * result[i-1]
+    
+    return result
+
+
+@njit(cache=True)
+def _rma_numba(values: np.ndarray, period: int) -> np.ndarray:
+    """Numba加速的RMA计算 (Wilder's smoothing)"""
+    n = len(values)
+    result = np.zeros(n)
+    
+    if n < period:
+        result[0] = values[0]
+        for i in range(1, n):
+            result[i] = (result[i-1] * i + values[i]) / (i + 1)
+    else:
+        # 前period-1个值使用累积平均
+        cumsum = 0.0
+        for i in range(period - 1):
+            cumsum += values[i]
+            result[i] = cumsum / (i + 1)
+        
+        # 第period个值 = 前period个值的平均
+        cumsum += values[period - 1]
+        result[period - 1] = cumsum / period
+        
+        # 从period开始使用Wilder's smoothing
+        for i in range(period, n):
+            result[i] = (result[i-1] * (period - 1) + values[i]) / period
+    
+    return result
+
+
+@njit(cache=True)
+def _bcwsma_numba(values: np.ndarray, length: int, m: int) -> np.ndarray:
+    """Numba加速的bcwsma计算 (用于KDJ)"""
+    n = len(values)
+    result = np.zeros(n)
+    
+    # 处理第一个值
+    result[0] = values[0] if not np.isnan(values[0]) else 0.0
+    
+    for i in range(1, n):
+        prev = result[i-1] if not np.isnan(result[i-1]) else 0.0
+        current = values[i] if not np.isnan(values[i]) else 0.0
+        result[i] = (m * current + (length - m) * prev) / length
+    
+    return result
+
+
+@njit(cache=True)
+def _wilder_smoothing_numba(tr: np.ndarray, dm_plus: np.ndarray, dm_minus: np.ndarray, period: int):
+    """Numba加速的Wilder's Smoothing (用于ADX)"""
+    n = len(tr)
+    smoothed_tr = np.zeros(n)
+    smoothed_dm_plus = np.zeros(n)
+    smoothed_dm_minus = np.zeros(n)
+    
+    # 初始化：前period个值的平均
+    sum_tr = 0.0
+    sum_dm_plus = 0.0
+    sum_dm_minus = 0.0
+    
+    for i in range(period):
+        sum_tr += tr[i]
+        sum_dm_plus += dm_plus[i]
+        sum_dm_minus += dm_minus[i]
+    
+    smoothed_tr[period - 1] = sum_tr / period
+    smoothed_dm_plus[period - 1] = sum_dm_plus / period
+    smoothed_dm_minus[period - 1] = sum_dm_minus / period
+    
+    # 累积平滑公式
+    for i in range(period, n):
+        smoothed_tr[i] = smoothed_tr[i-1] - (smoothed_tr[i-1] / period) + tr[i]
+        smoothed_dm_plus[i] = smoothed_dm_plus[i-1] - (smoothed_dm_plus[i-1] / period) + dm_plus[i]
+        smoothed_dm_minus[i] = smoothed_dm_minus[i-1] - (smoothed_dm_minus[i-1] / period) + dm_minus[i]
+    
+    return smoothed_tr, smoothed_dm_plus, smoothed_dm_minus
+
+
+@njit(cache=True)
+def _wma_numba(values: np.ndarray, period: int) -> np.ndarray:
+    """Numba加速的WMA计算 (加权移动平均)"""
+    n = len(values)
+    result = np.zeros(n)
+    
+    # 计算权重总和
+    weight_sum = period * (period + 1) / 2
+    
+    for i in range(period - 1, n):
+        weighted_sum = 0.0
+        for j in range(period):
+            weight = j + 1  # 权重从1到period
+            weighted_sum += values[i - period + 1 + j] * weight
+        result[i] = weighted_sum / weight_sum
+    
+    return result
+
+
+@njit(cache=True)
+def _swing_detection_numba(parsed_high: np.ndarray, parsed_low: np.ndarray, swing_length: int):
+    """Numba加速的摆动点检测"""
+    n = len(parsed_high)
+    leg = np.zeros(n, dtype=np.int32)
+    swing_high_bar = np.zeros(n, dtype=np.bool_)
+    swing_low_bar = np.zeros(n, dtype=np.bool_)
+    swing_high_price = np.full(n, np.nan)
+    swing_low_price = np.full(n, np.nan)
+    swing_high_index = np.full(n, -1, dtype=np.int32)
+    swing_low_index = np.full(n, -1, dtype=np.int32)
+    
+    # 计算 Leg
+    for i in range(swing_length, n):
+        # 查找前 swing_length 个 K线的最高点和最低点
+        max_high = parsed_high[i - swing_length]
+        min_low = parsed_low[i - swing_length]
+        for j in range(i - swing_length, i):
+            if parsed_high[j] > max_high:
+                max_high = parsed_high[j]
+            if parsed_low[j] < min_low:
+                min_low = parsed_low[j]
+        
+        # 新的高点突破 -> 看跌腿 (BEARISH_LEG = 0)
+        if parsed_high[i - swing_length] > max_high:
+            leg[i] = 0
+        # 新的低点突破 -> 看涨腿 (BULLISH_LEG = 1)
+        elif parsed_low[i - swing_length] < min_low:
+            leg[i] = 1
+        else:
+            leg[i] = leg[i-1] if i > 0 else 0
+    
+    # 检测摆动点
+    for i in range(swing_length + 1, n):
+        leg_changed = leg[i] != leg[i-1]
+        
+        if leg_changed:
+            swing_idx = i - swing_length
+            if swing_idx >= 0:
+                # 从看涨腿转为看跌腿 -> 记录高点
+                if leg[i-1] == 1 and leg[i] == 0:
+                    swing_high_bar[swing_idx] = True
+                    swing_high_price[swing_idx] = parsed_high[swing_idx]
+                    swing_high_index[swing_idx] = swing_idx
+                # 从看跌腿转为看涨腿 -> 记录低点
+                elif leg[i-1] == 0 and leg[i] == 1:
+                    swing_low_bar[swing_idx] = True
+                    swing_low_price[swing_idx] = parsed_low[swing_idx]
+                    swing_low_index[swing_idx] = swing_idx
+    
+    return leg, swing_high_bar, swing_low_bar, swing_high_price, swing_low_price, swing_high_index, swing_low_index
 
 class TradingStrategy:
     """
@@ -51,54 +228,15 @@ class TradingStrategy:
             print(f"❌ 不支持的模式: {mode}")
     
     def calculate_ema(self, series, period):
-        """TradingView精确EMA计算 - 使用SMA初始化"""
-        alpha = 2.0 / (period + 1.0)
-        result = np.zeros(len(series))
-        
-        # 🔥 关键修复：使用前N个点的SMA作为初始值（与TradingView一致）
-        if len(series) < period:
-            # 数据不足，使用简单平均
-            result[0] = series.iloc[0]
-        else:
-            # 计算前period个点的SMA作为第一个EMA值
-            result[period-1] = series.iloc[:period].mean()
-            
-            # 前period-1个点填充NaN或使用SMA递增计算
-            for i in range(period):
-                result[i] = series.iloc[:i+1].mean() if i < period-1 else result[period-1]
-        
-        # 从period开始递归计算EMA
-        start_idx = period if len(series) >= period else 1
-        for i in range(start_idx, len(series)):
-            result[i] = alpha * series.iloc[i] + (1 - alpha) * result[i-1]
-        
+        """TradingView精确EMA计算 - 使用Numba加速"""
+        values = series.values.astype(np.float64)
+        result = _ema_numba(values, period)
         return pd.Series(result, index=series.index)
     
     def calculate_rma(self, series, period):
-        """RMA 计算（Wilder's smoothing）- 完全对齐TradingView ta.rma"""
-        # 🔥 关键修复：完整实现Wilder's smoothing算法
-        # RMA[i] = (RMA[i-1] * (period - 1) + value[i]) / period
-        
-        result = np.zeros(len(series))
-        values = series.fillna(0).values  # 处理NaN
-        
-        # 初始化：前period个值的简单平均
-        if len(series) < period:
-            result[0] = values[0]
-            for i in range(1, len(series)):
-                result[i] = (result[i-1] * i + values[i]) / (i + 1)
-        else:
-            # 第一个RMA值 = 前period个值的平均
-            result[period-1] = np.mean(values[:period])
-            
-            # 前period-1个值使用累积平均
-            for i in range(period-1):
-                result[i] = np.mean(values[:i+1])
-            
-            # 从period开始使用Wilder's smoothing递归公式
-            for i in range(period, len(series)):
-                result[i] = (result[i-1] * (period - 1) + values[i]) / period
-        
+        """RMA 计算（Wilder's smoothing）- 使用Numba加速"""
+        values = series.fillna(0).values.astype(np.float64)
+        result = _rma_numba(values, period)
         return pd.Series(result, index=series.index)
     
     def calculate_sma(self, series, period):
@@ -106,18 +244,10 @@ class TradingStrategy:
         return series.rolling(window=period).mean()
     
     def bcwsma(self, series, length, m):
-        """
-        自定义 bcwsma (用于 KDJ)
-        _bcwsma := (m * series + (length - m) * nz(_bcwsma[1])) / length
-        """
-        res = np.zeros(len(series))
-        res[0] = series.iloc[0] if not pd.isna(series.iloc[0]) else 0
-        arr = series.values
-        for i in range(1, len(series)):
-            prev = res[i-1] if not np.isnan(res[i-1]) else 0
-            current = arr[i] if not np.isnan(arr[i]) else 0
-            res[i] = (m * current + (length - m) * prev) / length
-        return pd.Series(res, index=series.index)
+        """自定义 bcwsma (用于 KDJ) - 使用Numba加速"""
+        values = series.values.astype(np.float64)
+        result = _bcwsma_numba(values, length, m)
+        return pd.Series(result, index=series.index)
     
     def calculate_indicators(self, df):
         """
@@ -201,7 +331,7 @@ class TradingStrategy:
         df['obv_adx'] = adx_bottom
         
         # === 4. 趋势指标 (ADX) - 完全按 TradingView 逻辑 ===
-        # 🔥 使用 Wilder's Smoothing 累积平滑，不是 RMA
+        # 🔥 使用 Numba 加速的 Wilder's Smoothing
         len_adx = 14
         
         # True Range
@@ -211,40 +341,23 @@ class TradingStrategy:
         TrueRange = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         
         # Directional Movement
-        high_diff = df['high'].diff()
-        low_diff = df['low'].diff()
+        high_diff = df['high'].diff().fillna(0)
+        low_diff = df['low'].diff().fillna(0)
         DirectionalMovementPlus = np.where(
             (high_diff > -low_diff) & (high_diff > 0),
             high_diff,
             0
-        )
+        ).astype(np.float64)
         DirectionalMovementMinus = np.where(
             (-low_diff > high_diff) & (-low_diff > 0),
             -low_diff,
             0
-        )
+        ).astype(np.float64)
         
-        # 🔥 Wilder's Smoothing （累积平滑）
-        SmoothedTrueRange = np.zeros(len(df))
-        SmoothedDirectionalMovementPlus = np.zeros(len(df))
-        SmoothedDirectionalMovementMinus = np.zeros(len(df))
-        
-        # 初始化：前 N 个值的简单平均
-        SmoothedTrueRange[len_adx-1] = TrueRange[:len_adx].mean()
-        SmoothedDirectionalMovementPlus[len_adx-1] = DirectionalMovementPlus[:len_adx].mean()
-        SmoothedDirectionalMovementMinus[len_adx-1] = DirectionalMovementMinus[:len_adx].mean()
-        
-        # 累积平滑公式： Smoothed[i] = Smoothed[i-1] - (Smoothed[i-1]/N) + Current[i]
-        for i in range(len_adx, len(df)):
-            SmoothedTrueRange[i] = (SmoothedTrueRange[i-1] - 
-                                    (SmoothedTrueRange[i-1] / len_adx) + 
-                                    TrueRange.iloc[i])
-            SmoothedDirectionalMovementPlus[i] = (SmoothedDirectionalMovementPlus[i-1] - 
-                                                  (SmoothedDirectionalMovementPlus[i-1] / len_adx) + 
-                                                  DirectionalMovementPlus[i])
-            SmoothedDirectionalMovementMinus[i] = (SmoothedDirectionalMovementMinus[i-1] - 
-                                                   (SmoothedDirectionalMovementMinus[i-1] / len_adx) + 
-                                                   DirectionalMovementMinus[i])
+        # 🔥 使用 Numba 加速的 Wilder's Smoothing
+        tr_values = TrueRange.fillna(0).values.astype(np.float64)
+        SmoothedTrueRange, SmoothedDirectionalMovementPlus, SmoothedDirectionalMovementMinus = \
+            _wilder_smoothing_numba(tr_values, DirectionalMovementPlus, DirectionalMovementMinus, len_adx)
         
         # 计算 DI+ 和 DI-
         SmoothedTrueRange = pd.Series(SmoothedTrueRange, index=df.index).replace(0, 1e-10)
@@ -254,10 +367,9 @@ class TradingStrategy:
         # 计算 DX
         DX = 100 * abs(DIPlus - DIMinus) / (DIPlus + DIMinus).replace(0, 1)
         
-        # 🔥 ADX = WMA(DX, 14) （加权移动平均）
-        df['trend_adx'] = DX.rolling(window=len_adx).apply(
-            lambda x: np.average(x, weights=np.arange(1, len_adx + 1)), raw=True
-        )
+        # 🔥 ADX = WMA(DX, 14) （加权移动平均）- 使用Numba加速
+        dx_values = DX.fillna(0).values.astype(np.float64)
+        df['trend_adx'] = pd.Series(_wma_numba(dx_values, len_adx), index=df.index)
         df['adx_slope'] = df['trend_adx'].diff()
         
         # 保留 ATR 用于订单块
@@ -337,63 +449,31 @@ class TradingStrategy:
         df['parsed_high'] = parsedHigh
         df['parsed_low'] = parsedLow
         
-        # Step 2: 计算 Leg (趋势腿)
+        # Step 2 & 3: 使用 Numba 加速的摆动点检测
         swing_length = self.swing_len
-        leg = np.zeros(len(df), dtype=int)
+        parsed_high_arr = parsedHigh.astype(np.float64) if isinstance(parsedHigh, np.ndarray) else parsedHigh
+        parsed_low_arr = parsedLow.astype(np.float64) if isinstance(parsedLow, np.ndarray) else parsedLow
         
-        for i in range(swing_length, len(df)):
-            # 查找前 swing_length 个 K线的最高点和最低点
-            recent_highs = parsedHigh[i-swing_length:i]
-            recent_lows = parsedLow[i-swing_length:i]
-            
-            # 新的高点突破 -> 看跌腿 (BEARISH_LEG = 0)
-            if parsedHigh[i-swing_length] > max(recent_highs):
-                leg[i] = 0  # BEARISH_LEG
-            # 新的低点突破 -> 看涨腿 (BULLISH_LEG = 1)
-            elif parsedLow[i-swing_length] < min(recent_lows):
-                leg[i] = 1  # BULLISH_LEG
-            else:
-                leg[i] = leg[i-1] if i > 0 else 0
+        leg, swing_high_bar, swing_low_bar, swing_high_price, swing_low_price, swing_high_index, swing_low_index = \
+            _swing_detection_numba(parsed_high_arr, parsed_low_arr, swing_length)
         
         df['leg'] = leg
+        df['swing_high_bar'] = swing_high_bar
+        df['swing_low_bar'] = swing_low_bar
+        df['swing_high_price'] = swing_high_price
+        df['swing_low_price'] = swing_low_price
+        df['swing_high_index'] = swing_high_index
+        df['swing_low_index'] = swing_low_index
         
-        # Step 3: 检测摆动点 (Swing Highs/Lows)
-        df['swing_high_bar'] = False
-        df['swing_low_bar'] = False
-        df['swing_high_price'] = np.nan
-        df['swing_low_price'] = np.nan
-        df['swing_high_index'] = -1
-        df['swing_low_index'] = -1
-        
-        current_swing_high = np.nan
-        current_swing_low = np.nan
-        last_swing_high_idx = -1
-        last_swing_low_idx = -1
-        
-        for i in range(swing_length + 1, len(df)):
-            # 检测 Leg 变化
-            leg_changed = leg[i] != leg[i-1]
-            
-            if leg_changed:
-                # 从看涨腿转为看跌腿 -> 记录高点
-                if leg[i-1] == 1 and leg[i] == 0:
-                    swing_idx = i - swing_length
-                    if swing_idx >= 0:
-                        df.loc[df.index[swing_idx], 'swing_high_bar'] = True
-                        df.loc[df.index[swing_idx], 'swing_high_price'] = df['high'].iloc[swing_idx]
-                        df.loc[df.index[swing_idx], 'swing_high_index'] = swing_idx
-                        current_swing_high = df['high'].iloc[swing_idx]
-                        last_swing_high_idx = swing_idx
-                
-                # 从看跌腿转为看涨腿 -> 记录低点
-                elif leg[i-1] == 0 and leg[i] == 1:
-                    swing_idx = i - swing_length
-                    if swing_idx >= 0:
-                        df.loc[df.index[swing_idx], 'swing_low_bar'] = True
-                        df.loc[df.index[swing_idx], 'swing_low_price'] = df['low'].iloc[swing_idx]
-                        df.loc[df.index[swing_idx], 'swing_low_index'] = swing_idx
-                        current_swing_low = df['low'].iloc[swing_idx]
-                        last_swing_low_idx = swing_idx
+        # 🔥 修复：swing_high_price 需要使用原始 high 值，而不是 parsed_high
+        # 重新赋值正确的价格
+        high_values = df['high'].values
+        low_values = df['low'].values
+        for i in range(len(df)):
+            if swing_high_bar[i]:
+                df.iloc[i, df.columns.get_loc('swing_high_price')] = high_values[i]
+            if swing_low_bar[i]:
+                df.iloc[i, df.columns.get_loc('swing_low_price')] = low_values[i]
         
         # === 9. ATR 计算（用于订单块触发宽度）===
         df['atr'] = atr
@@ -699,23 +779,23 @@ class TradingStrategy:
                     "reason": f"[{timeframe}]何以为底逃顶信号 | Stoch={curr['stoch_k']:.1f}"
                 }
         
-        # 🔥 规则3：1m 顶底信号仅用于止盈（不开仓）
+        # 🔥 规则3：1m 顶底信号可用于开仓和止盈
         if timeframe == '1m':
             if bottom_buy:
                 return {
                     "action": "LONG",
-                    "type": "TP_BOTTOM",  # 🔥 特殊标记：止盈专用
-                    "position_pct": 0,
-                    "leverage": 0,
-                    "reason": f"[{timeframe}]顶底止盈信号（仅平仓）"
+                    "type": "SUB_BOTTOM",
+                    "position_pct": self.sub_signal_pct,
+                    "leverage": 50,
+                    "reason": f"[{timeframe}]何以为底抄底信号 | Stoch={curr['stoch_k']:.1f} | OBV_ADX={curr['obv_adx']:.1f}"
                 }
             elif bottom_sell:
                 return {
                     "action": "SHORT",
-                    "type": "TP_TOP",  # 🔥 特殊标记：止盈专用
-                    "position_pct": 0,
-                    "leverage": 0,
-                    "reason": f"[{timeframe}]顶底止盈信号（仅平仓）"
+                    "type": "SUB_TOP",
+                    "position_pct": self.sub_signal_pct,
+                    "leverage": 50,
+                    "reason": f"[{timeframe}]何以为底逃顶信号 | Stoch={curr['stoch_k']:.1f}"
                 }
         
         # 🔥 规则4：30m/1h 订单块可用于开仓和加仓（次信号）

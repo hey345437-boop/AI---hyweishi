@@ -156,6 +156,66 @@ from strategy_registry import (
 _ohlcv_cache: Dict[str, Any] = {}  # {(symbol, timeframe): {'data': df, 'ts': timestamp}}
 _OHLCV_CACHE_TTL = 30  # 缓存有效期（秒）
 
+# 🔥 并行策略分析的线程池（全局复用，避免重复创建）
+_strategy_executor = None
+_STRATEGY_EXECUTOR_WORKERS = 4  # 并行工作线程数
+
+def get_strategy_executor():
+    """获取策略分析线程池（懒加载）"""
+    global _strategy_executor
+    if _strategy_executor is None:
+        _strategy_executor = ThreadPoolExecutor(max_workers=_STRATEGY_EXECUTOR_WORKERS, thread_name_prefix="strategy_")
+    return _strategy_executor
+
+
+def _analyze_symbol(args):
+    """
+    单个币种的策略分析（用于并行执行）
+    
+    参数: (symbol, ticker, symbol_data, timeframe, ohlcv_lag_dict, ohlcv_stale_dict, strategy_engine)
+    返回: (symbol, scan_results, curr_price) 或 None
+    
+    注意: strategy_engine 必须是线程安全的（无状态或使用线程本地存储）
+    """
+    symbol, ticker, symbol_data, timeframe, ohlcv_lag_dict, ohlcv_stale_dict, strategy_engine = args
+    
+    try:
+        if not ticker or ticker.get("last", 0) <= 0:
+            return None
+        
+        if symbol_data is None:
+            return None
+        
+        # 检查 K线数据是否存在
+        _df = symbol_data.get(timeframe)
+        if _df is None:
+            return None
+        
+        # 检查 K线数据是否滞后
+        is_lag = ohlcv_lag_dict.get(symbol, {}).get(timeframe, False)
+        if is_lag:
+            return None
+        
+        # 检查 K线数据是否为 stale
+        is_stale = ohlcv_stale_dict.get(symbol, {}).get(timeframe, False)
+        if is_stale:
+            return None
+        
+        curr_price = ticker.get("last")
+        
+        # 调用策略引擎分析（核心计算，CPU密集型）
+        scan_results = strategy_engine.run_analysis_with_data(
+            symbol,
+            symbol_data,
+            [timeframe]
+        )
+        
+        return (symbol, scan_results, curr_price)
+    except Exception as e:
+        # 静默处理错误，避免影响其他币种
+        logging.getLogger(__name__).debug(f"[parallel] {symbol} 分析失败: {e}")
+        return None
+
 def get_cached_ohlcv(symbol: str, timeframe: str) -> Any:
     """获取缓存的K线数据"""
     key = (symbol, timeframe)
@@ -1477,18 +1537,44 @@ def main():
                                     logger.debug(f"{symbol} 紧急平仓失败: {e}")
                     else:
                         # 🔥 模拟模式：从数据库获取模拟持仓并清除
-                        # 先获取当前价格用于计算盈亏
+                        # 先获取所有持仓的symbol
+                        paper_positions = get_paper_positions()
+                        hedge_positions_list = get_hedge_positions()
+                        
+                        # 收集所有需要获取价格的symbol
+                        symbols_to_fetch = set()
+                        if paper_positions:
+                            for pos_key, pos in paper_positions.items():
+                                symbols_to_fetch.add(pos.get('symbol'))
+                        if hedge_positions_list:
+                            for hedge_pos in hedge_positions_list:
+                                symbols_to_fetch.add(hedge_pos.get('symbol'))
+                        
+                        # 获取当前价格（先获取价格，用于更新 equity）
                         flatten_tickers = {}
-                        if provider:
+                        if provider and symbols_to_fetch:
                             try:
-                                flatten_tickers = provider.fetch_tickers(list(TRADE_SYMBOLS.keys()))
-                            except Exception:
-                                pass
+                                flatten_tickers = provider.fetch_tickers(list(symbols_to_fetch))
+                                logger.debug(f"紧急平仓获取价格: {list(flatten_tickers.keys())}")
+                            except Exception as e:
+                                logger.error(f"获取价格失败: {e}")
+                        
+                        # 🔥 在删除持仓之前，先用最新价格更新 equity
+                        if flatten_tickers and (paper_positions or hedge_positions_list):
+                            try:
+                                update_positions_with_prices(flatten_tickers, max_lev)
+                                logger.debug("紧急平仓: 已用最新价格更新 equity")
+                            except Exception as e:
+                                logger.warning(f"更新 equity 失败: {e}")
+                        
+                        # 🔥 获取更新后的 equity（包含未实现盈亏）
+                        pre_flatten_balance = get_paper_balance()
+                        pre_flatten_equity = float(pre_flatten_balance.get('equity', 200) or 200)
+                        logger.debug(f"紧急平仓: 平仓前 equity=${pre_flatten_equity:.2f}")
                         
                         total_pnl = 0.0
                         total_margin_released = 0.0
                         
-                        paper_positions = get_paper_positions()
                         if paper_positions:
                             for pos_key, pos in paper_positions.items():
                                 symbol = pos.get('symbol')
@@ -1501,7 +1587,18 @@ def main():
                                         # 获取当前价格
                                         current_price = entry_price
                                         if symbol in flatten_tickers:
-                                            current_price = float(flatten_tickers[symbol].get('last', entry_price) or entry_price)
+                                            ticker_data = flatten_tickers[symbol]
+                                            current_price = float(ticker_data.get('last', entry_price) or entry_price)
+                                        else:
+                                            # 🔥 尝试直接从provider获取单个价格
+                                            logger.warning(f"紧急平仓: {symbol} 不在批量价格中，尝试单独获取")
+                                            if provider:
+                                                try:
+                                                    single_ticker = provider.fetch_ticker(symbol)
+                                                    if single_ticker:
+                                                        current_price = float(single_ticker.get('last', entry_price) or entry_price)
+                                                except Exception:
+                                                    pass
                                         
                                         # 计算盈亏
                                         if pos_side == 'long':
@@ -1553,7 +1650,17 @@ def main():
                                         # 获取当前价格
                                         current_price = entry_price
                                         if symbol in flatten_tickers:
-                                            current_price = float(flatten_tickers[symbol].get('last', entry_price) or entry_price)
+                                            ticker_data = flatten_tickers[symbol]
+                                            current_price = float(ticker_data.get('last', entry_price) or entry_price)
+                                        else:
+                                            # 🔥 尝试直接从provider获取单个价格
+                                            if provider:
+                                                try:
+                                                    single_ticker = provider.fetch_ticker(symbol)
+                                                    if single_ticker:
+                                                        current_price = float(single_ticker.get('last', entry_price) or entry_price)
+                                                except Exception:
+                                                    pass
                                         
                                         # 计算盈亏
                                         if pos_side == 'long':
@@ -1591,28 +1698,37 @@ def main():
                             print(f"   ℹ️ 无对冲仓需要平仓")
                         
                         # 🔥 更新账户余额（释放保证金 + 盈亏）
-                        if total_margin_released > 0 or total_pnl != 0:
-                            try:
-                                paper_bal = get_paper_balance()
-                                current_equity = float(paper_bal.get('equity', 200) or 200)
-                                current_available = float(paper_bal.get('available', 200) or 200)
-                                wallet_balance = float(paper_bal.get('wallet_balance', 200) or 200)
-                                
-                                # 更新余额
+                        # 无论 total_margin_released 和 total_pnl 是多少，都要更新余额
+                        try:
+                            paper_bal = get_paper_balance()
+                            wallet_balance = float(paper_bal.get('wallet_balance', 200) or 200)
+                            
+                            logger.debug(f"紧急平仓: 平仓前equity={pre_flatten_equity}, wallet={wallet_balance}, total_pnl={total_pnl}")
+                            
+                            # 🔥 修复：平仓后净值 = 平仓前的权益（已包含未实现盈亏）
+                            # 如果 total_pnl 计算正确，则 new_wallet = wallet_balance + total_pnl
+                            # 如果 total_pnl = 0（价格获取失败），则使用平仓前的 equity 作为新净值
+                            if total_pnl != 0:
                                 new_wallet = wallet_balance + total_pnl
-                                new_equity = new_wallet  # 平仓后无持仓，equity = wallet
-                                new_available = new_wallet
-                                
-                                update_paper_balance(
-                                    wallet_balance=new_wallet,
-                                    equity=new_equity,
-                                    available=new_available,
-                                    unrealized_pnl=0.0,
-                                    used_margin=0.0
-                                )
-                                print(f"   💰 账户更新: 释放保证金=${total_margin_released:.2f} | 总PnL=${total_pnl:+.2f} | 新净值=${new_equity:.2f}")
-                            except Exception as e:
-                                logger.error(f"更新账户余额失败: {e}")
+                            else:
+                                # 价格获取失败时，使用平仓前的权益作为新净值
+                                new_wallet = pre_flatten_equity
+                                logger.warning(f"紧急平仓: PnL=0，使用平仓前权益 ${pre_flatten_equity:.2f} 作为新净值")
+                            
+                            # 🔥 平仓后无持仓，equity = wallet
+                            new_equity = new_wallet
+                            new_available = new_wallet
+                            
+                            update_paper_balance(
+                                wallet_balance=new_wallet,
+                                equity=new_equity,
+                                available=new_available,
+                                unrealized_pnl=0.0,
+                                used_margin=0.0
+                            )
+                            print(f"   💰 账户更新: 释放保证金=${total_margin_released:.2f} | 总PnL=${total_pnl:+.2f} | 新净值=${new_equity:.2f}")
+                        except Exception as e:
+                            logger.error(f"更新账户余额失败: {e}")
                 except Exception as e:
                     logger.error(f"执行紧急平仓操作失败: {e}")
                     update_engine_status(last_error=str(e))
@@ -1753,8 +1869,7 @@ def main():
             price_fetch_time = time.time() - price_fetch_start
             scan_price_ok = len(tickers)  # 记录价格获取成功数量
             
-            # 🔥 DEBUG: 打印价格获取耗时
-            print(f"   ⏱️ [DEBUG] 价格获取耗时: {price_fetch_time:.2f}s (批量模式)")
+            # 价格获取耗时（将在 render_scan_block 中统一输出）
             
             # 🔥 MTM 已在 balance_syncer（第30秒）执行，0秒扫描直接使用缓存的风控结果
             # 不再重复执行 MTM，避免权益数据不一致
@@ -1966,8 +2081,7 @@ def main():
             fail_info = f" | 失败: {len(fetch_failed_list)}" if fetch_failed_list else ""
             logger.info(f"[scan] 并行拉取完成 | 耗时: {fetch_cost:.2f}s | 触发时间: {now.strftime('%H:%M:%S')} | 成功: {ohlcv_ok_count}/{len(current_symbols) * len(due_timeframes)}{fail_info}")
             
-            # 🔥 DEBUG: 打印数据获取耗时
-            print(f"   ⏱️ [DEBUG] 数据获取耗时: {fetch_cost:.2f}s")
+            # 数据获取耗时（将在 render_scan_block 中统一输出）
             
             # 🔥 记录信号计算开始时间
             signal_calc_start = time.perf_counter()
@@ -2189,48 +2303,53 @@ def main():
                 scan_signals = 0
                 scan_orders = 0
                 
-                # 🔥 遍历每个币种，调用策略引擎分析
+                # ============================================================
+                # 🔥 并行策略分析（多币种同时计算）
+                # 使用线程池并行执行策略计算，显著提升多币种场景性能
+                # ============================================================
+                analysis_start = time.time()
+                
+                # 准备并行任务参数
+                analysis_tasks = []
                 for symbol, ticker in tickers.items():
                     if not ticker or ticker.get("last", 0) <= 0:
                         continue
-                    
                     if symbol not in preloaded_data:
                         continue
-                    
-                    # 检查 K线数据是否存在
-                    _df = preloaded_data[symbol].get(timeframe)
-                    if _df is None:
-                        continue
-                    
-                    # 🔥 检查 K线数据是否滞后（关键校验）
-                    # 注意：ohlcv_lag_dict 现在是嵌套字典 {symbol: {timeframe: bool}}
-                    is_lag = ohlcv_lag_dict.get(symbol, {}).get(timeframe, False)
-                    if is_lag:
-                        # 🔥 数据滞后：交易所还没推送当前分钟的K线，禁止触发信号
-                        # 防止重复使用上一分钟的K线下单
-                        continue
-                    
-                    # 🔥 检查 K线数据是否为 stale（陈旧）
-                    # 注意：ohlcv_stale_dict 现在是嵌套字典 {symbol: {timeframe: bool}}
-                    is_stale = ohlcv_stale_dict.get(symbol, {}).get(timeframe, False)
-                    if is_stale:
-                        # 🔥 stale 数据禁止触发信号/下单
-                        logger.debug(f"[scan-skip] reason=ohlcv_stale symbol={symbol} tf={timeframe}")
-                        continue
-                    
-                    curr_price = ticker.get("last")
-                    
-                    # 🔥 调用策略引擎分析
-                    try:
-                        scan_results = strategy_engine.run_analysis_with_data(
-                            symbol,
-                            preloaded_data[symbol],
-                            [timeframe]
-                        )
-                    except Exception as e:
-                        logger.warning(f"{symbol} 策略分析失败: {e}")
-                        continue
-                    
+                    # 打包参数元组
+                    analysis_tasks.append((
+                        symbol, ticker, preloaded_data[symbol], timeframe,
+                        ohlcv_lag_dict, ohlcv_stale_dict, strategy_engine
+                    ))
+                
+                # 执行策略分析（根据任务数量选择串行或并行）
+                analysis_results = []
+                PARALLEL_THRESHOLD = 8  # 币种数量超过此阈值才使用并行
+                
+                if analysis_tasks:
+                    if len(analysis_tasks) >= PARALLEL_THRESHOLD:
+                        # 🔥 并行执行：币种多时使用线程池
+                        executor = get_strategy_executor()
+                        try:
+                            for result in executor.map(_analyze_symbol, analysis_tasks, timeout=10):
+                                if result is not None:
+                                    analysis_results.append(result)
+                        except Exception as e:
+                            logger.warning(f"[parallel] 并行分析超时或失败: {e}")
+                    else:
+                        # 🔥 串行执行：币种少时避免线程池开销
+                        for task in analysis_tasks:
+                            result = _analyze_symbol(task)
+                            if result is not None:
+                                analysis_results.append(result)
+                
+                analysis_elapsed = time.time() - analysis_start
+                logger.debug(f"[parallel] 并行分析完成 | 任务数: {len(analysis_tasks)} | 结果数: {len(analysis_results)} | 耗时: {analysis_elapsed:.3f}s")
+                
+                # ============================================================
+                # 🔥 串行处理分析结果（信号标准化、去重、下单）
+                # ============================================================
+                for symbol, scan_results, curr_price in analysis_results:
                     # ============================================================
                     # 🔥 信号标准化 (Signal Normalization)
                     # 确保所有信号都包含 'action', 'type', 'symbol' 等必要字段
@@ -2269,18 +2388,12 @@ def main():
                             is_tp_signal = signal_type in TP_ONLY_SIGNAL_TYPES
                             is_1m_bottom_top = tf == '1m' and ('TOP' in signal_type.upper() or 'BOTTOM' in signal_type.upper())
                             
-                            # 打印信号日志
-                            signal_tag = "🔔" if not is_tp_signal and not is_1m_bottom_top else "💡"
+                            # 信号日志（仅记录到logger，不打印到控制台）
                             execute_tag = "可执行" if not is_tp_signal and not is_1m_bottom_top else "仅止盈"
-                            print(f"   {signal_tag} [{tf}] {symbol} | {action} {signal_type} | {execute_tag}")
                             logger.info(f"[SIGNAL] {symbol} {tf} | {action} {signal_type} | {execute_tag}")
                         
                         # 🔥 过滤止盈专用信号（TP_* 类型不开仓，但已打印日志）
                         if signal_type in TP_ONLY_SIGNAL_TYPES:
-                            continue
-                        
-                        # 🔥 1m周期的顶底信号只用于止盈，不用于开仓（但已打印日志）
-                        if tf == '1m' and ('TOP' in signal_type.upper() or 'BOTTOM' in signal_type.upper()):
                             continue
                         
                         # 找到有效信号
@@ -2395,9 +2508,8 @@ def main():
                     margin = _cached_equity * position_pct if _cached_equity > 0 else base_position_size
                     position_value = margin * max_lev  # 仓位价值 = 保证金 × 杠杆
                     
-                    # 🔥 调试：打印订单大小计算过程
+                    # 订单大小计算（仅记录到logger，不打印到控制台）
                     logger.info(f"[Order Sizing] 基数权益: ${_cached_equity:.2f} | 仓位比例: {position_pct*100:.2f}% | 保证金: ${margin:.2f} | 杠杆: {max_lev}x | 名义价值: ${position_value:.2f}")
-                    print(f"   📐 [Order Sizing] 权益=${_cached_equity:.2f} × {position_pct*100:.1f}% = 保证金${margin:.2f} × {max_lev}x = 名义价值${position_value:.2f}")
                     
                     order_type_str = "对冲单" if is_hedge_order else "主仓单"
                     
@@ -2735,9 +2847,8 @@ def main():
                     # 记录模拟订单（仅日志）
                     logger.debug(f"模拟订单: {json.dumps(plan_order)} (run_mode: {run_mode}, pause_trading: {pause_trading}, allow_live: {control.get('allow_live')}) | 周期: {timeframe}")
             
-            # 🔥 DEBUG: 打印信号计算耗时
+            # 信号计算耗时（将在 render_scan_block 中统一输出）
             signal_calc_cost = time.perf_counter() - signal_calc_start
-            print(f"   ⏱️ [DEBUG] 信号计算耗时: {signal_calc_cost:.2f}s")
             
             # 计算循环耗时
             cycle_time = int((time.time() - cycle_start_time) * 1000)
@@ -2790,7 +2901,12 @@ def main():
                     signals=scan_collected_signals,
                     orders=scan_collected_orders,
                     elapsed_sec=cycle_elapsed,
-                    logger=logger
+                    logger=logger,
+                    debug_timing={
+                        'price_fetch': price_fetch_time,
+                        'data_fetch': fetch_cost,
+                        'signal_calc': signal_calc_cost
+                    }
                 )
                 
             except Exception as e:

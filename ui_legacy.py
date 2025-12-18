@@ -929,11 +929,12 @@ def render_sidebar(view_model, actions):
 
         # selectbox 使用 key + on_change 回调
         st.selectbox(
-            "",
+            "运行模式",
             RUN_MODE_UI,
             index=RUN_MODE_UI.index(st.session_state.env_mode) if st.session_state.env_mode in RUN_MODE_UI else 0,
             key='env_mode_selector',
-            on_change=_on_env_mode_change
+            on_change=_on_env_mode_change,
+            label_visibility="collapsed"
         )
 
         env_cfg = actions.get("get_env_config", lambda m: {"api_source": "live", "is_sandbox": False})(st.session_state.env_mode)
@@ -1024,12 +1025,13 @@ def render_sidebar(view_model, actions):
         
         # selectbox 使用稳定 strategy_id, 不用下拉索引
         selected_strategy_tuple = st.selectbox(
-            "",
+            "策略选择",
             strategy_options,
             index=current_idx,
             key='strategy_selectbox',
             format_func=lambda x: x[0],
-            on_change=_on_strategy_change
+            on_change=_on_strategy_change,
+            label_visibility="collapsed"
         )
         # 同步 session_state(为了兼容其他代码访问 strategy_module)
         if selected_strategy_tuple[1] != st.session_state.get('selected_strategy_id'):
@@ -1427,12 +1429,13 @@ def render_sidebar(view_model, actions):
         current_idx = mode_options.index(current_mode) if current_mode in mode_options else 0
         
         st.selectbox(
-            "",
+            "数据源模式",
             mode_options,
             index=current_idx,
             key='data_source_selector',
             format_func=lambda x: DATA_SOURCE_MODES.get(x, x),
-            on_change=_on_data_source_change
+            on_change=_on_data_source_change,
+            label_visibility="collapsed"
         )
         
         # 模式说明
