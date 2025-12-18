@@ -673,7 +673,7 @@ def render_login(view_model, actions):
                 remember_pwd = st.checkbox("记住密码", value=True, key="remember_password")
             
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("⚡ 进入系统", use_container_width=True):
+            if st.button("⚡ 进入系统"):
                     # 忽略用户输入两端的意外空白字符后比较
                     if (password_input or '').strip() == ACCESS_PASSWORD:
                         # 🔥 如果勾选了记住密码，保存到 URL 参数（下次访问时自动填充）
@@ -1185,7 +1185,7 @@ def render_sidebar(view_model, actions):
                 col_save, col_clear = st.columns([3, 1])
                 with col_save:
                     st.button("💾 保存 API 配置", key="save_dual_key_btn", 
-                              on_click=_save_dual_key_config, use_container_width=True)
+                              on_click=_save_dual_key_config)
                 with col_clear:
                     if st.button("🗑️", key="clear_key_btn", help="清除已保存的配置"):
                         config_mgr.clear_credentials()
@@ -2101,7 +2101,7 @@ def _render_kline_chart_plotly(ohlcv_data, selected_symbol, selected_tf, data_so
     )
     
     config = {'scrollZoom': True, 'displayModeBar': True, 'displaylogo': False}
-    st.plotly_chart(fig, use_container_width=True, config=config)
+    st.plotly_chart(fig, config=config)
 
 
 @st.fragment(run_every=2)
@@ -2177,7 +2177,7 @@ def _render_position_analysis_fragment(view_model, actions):
         
         if pos_data:
             df_positions = pd.DataFrame(pos_data)
-            st.dataframe(df_positions, use_container_width=True, hide_index=True)
+            st.dataframe(df_positions, hide_index=True)
     else:
         st.info("暂无持仓数据")
 
@@ -2384,7 +2384,7 @@ def render_dashboard(view_model, actions):
                         equity_data.append({'时间': time_str, '净值': cumulative_equity})
                     
                     df_equity = pd.DataFrame(equity_data)
-                    st.line_chart(df_equity.set_index('时间')['净值'], use_container_width=True)
+                    st.line_chart(df_equity.set_index('时间')['净值'])
                     st.caption(f"共 {len(sorted_trades)} 笔交易")
                 else:
                     st.info("暂无交易记录，完成首笔交易后将显示资金曲线")
