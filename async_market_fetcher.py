@@ -246,13 +246,176 @@ class AsyncMarketFetcher:
         total_time = (time.perf_counter() - start_time) * 1000
         success_count = sum(1 for r in processed_results if r.success)
         
+        # 🔥 计算各请求的延迟分布
+        latencies = [r.latency_ms for r in processed_results if r.success]
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        max_latency = max(latencies) if latencies else 0
+        min_latency = min(latencies) if latencies else 0
+        
         logger.info(
             f"[AsyncFetcher] 批量获取完成 | "
-            f"任务数: {len(tasks)} | 成功: {success_count} | "
-            f"总耗时: {total_time:.0f}ms"
+            f"任务: {len(tasks)} | 成功: {success_count} | "
+            f"总耗时: {total_time:.0f}ms | "
+            f"延迟: {min_latency:.0f}/{avg_latency:.0f}/{max_latency:.0f}ms (min/avg/max)"
         )
         
         return processed_results
+
+
+# ============ 🔥 持久化事件循环 + 连接池（单例模式）============
+
+import threading
+import atexit
+import os
+
+# 🔥 全局单例状态（模块级别，进程内唯一）
+_background_loop: Optional[asyncio.AbstractEventLoop] = None
+_background_thread: Optional[threading.Thread] = None
+_global_fetcher: Optional[AsyncMarketFetcher] = None
+_global_fetcher_config: Dict[str, Any] = {}
+_init_lock = threading.Lock()
+_singleton_id: Optional[int] = None  # 用于追踪单例实例
+
+
+def _start_background_loop(loop: asyncio.AbstractEventLoop):
+    """在后台线程中运行事件循环"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+def _get_or_create_loop() -> asyncio.AbstractEventLoop:
+    """
+    🔥 获取或创建持久化的后台事件循环（单例模式 + 双重检查锁定）
+    
+    使用单独的后台线程运行事件循环，避免每次 asyncio.run() 创建新循环。
+    双重检查锁定：先无锁检查，只有需要创建时才获取锁。
+    """
+    global _background_loop, _background_thread, _singleton_id
+    
+    # 🔥 第一次检查（无锁，快速路径）
+    if (_background_thread is not None and _background_thread.is_alive() and
+        _background_loop is not None and _background_loop.is_running()):
+        return _background_loop
+    
+    # 🔥 需要创建或重建，获取锁
+    with _init_lock:
+        # 第二次检查（有锁，防止竞态）
+        thread_alive = _background_thread is not None and _background_thread.is_alive()
+        loop_running = _background_loop is not None and _background_loop.is_running()
+        
+        if thread_alive and loop_running:
+            return _background_loop
+        
+        # 清理旧的循环（如果有）
+        if _background_loop is not None:
+            try:
+                if _background_loop.is_running():
+                    _background_loop.call_soon_threadsafe(_background_loop.stop)
+            except Exception:
+                pass
+        
+        # 创建新的事件循环和线程
+        _background_loop = asyncio.new_event_loop()
+        _background_thread = threading.Thread(
+            target=_start_background_loop,
+            args=(_background_loop,),
+            daemon=True,
+            name="AsyncFetcher-EventLoop"
+        )
+        _background_thread.start()
+        
+        # 等待事件循环启动
+        time.sleep(0.01)
+        
+        # 记录单例 ID
+        _singleton_id = id(_background_thread)
+        logger.info(f"[AsyncFetcher] 后台事件循环已启动 (singleton_id={_singleton_id}, pid={os.getpid()})")
+    
+    return _background_loop
+
+
+def get_fetcher_status() -> Dict[str, Any]:
+    """
+    🔥 获取 fetcher 状态（用于调试和监控）
+    """
+    return {
+        "singleton_id": _singleton_id,
+        "pid": os.getpid(),
+        "thread_alive": _background_thread.is_alive() if _background_thread else False,
+        "loop_running": _background_loop.is_running() if _background_loop else False,
+        "fetcher_initialized": _global_fetcher is not None,
+        "fetcher_config": {k: "***" if "secret" in k or "key" in k else v 
+                          for k, v in _global_fetcher_config.items()},
+    }
+
+
+async def _get_or_create_fetcher(
+    api_key: str,
+    api_secret: str,
+    passphrase: str,
+    sandbox: bool,
+    market_type: str,
+    max_concurrent: int,
+) -> AsyncMarketFetcher:
+    """
+    🔥 获取或创建全局 fetcher 实例（连接复用 + 快速路径）
+    
+    只有在配置变化或连接失效时才重新创建，
+    避免每次扫描都调用 load_markets()
+    """
+    global _global_fetcher, _global_fetcher_config
+    
+    # 🔥 快速路径：如果 fetcher 存在且连接有效，直接返回
+    if (_global_fetcher is not None and 
+        _global_fetcher.exchange is not None and
+        _global_fetcher_config.get("api_key") == api_key and
+        _global_fetcher_config.get("sandbox") == sandbox):
+        return _global_fetcher
+    
+    current_config = {
+        "api_key": api_key,
+        "api_secret": api_secret,
+        "passphrase": passphrase,
+        "sandbox": sandbox,
+        "market_type": market_type,
+        "max_concurrent": max_concurrent,
+    }
+    
+    # 检查是否需要重新创建
+    need_recreate = False
+    
+    if _global_fetcher is None:
+        need_recreate = True
+        logger.debug("[AsyncFetcher] 首次创建全局实例")
+    elif _global_fetcher_config != current_config:
+        need_recreate = True
+        logger.info("[AsyncFetcher] 配置变化，重新创建实例")
+    elif _global_fetcher.exchange is None:
+        need_recreate = True
+        logger.warning("[AsyncFetcher] 连接已关闭，重新创建实例")
+    
+    if need_recreate:
+        # 关闭旧连接
+        if _global_fetcher is not None:
+            try:
+                await _global_fetcher.close()
+            except Exception:
+                pass
+        
+        # 创建新实例
+        _global_fetcher = AsyncMarketFetcher(
+            api_key=api_key,
+            api_secret=api_secret,
+            passphrase=passphrase,
+            sandbox=sandbox,
+            market_type=market_type,
+            max_concurrent=max_concurrent,
+        )
+        await _global_fetcher.initialize()
+        _global_fetcher_config = current_config
+        logger.info("[AsyncFetcher] 全局实例已创建/更新")
+    
+    return _global_fetcher
 
 
 # ============ 同步兼容接口 ============
@@ -269,7 +432,11 @@ def fetch_batch_ohlcv_sync(
     """
     同步接口：批量获取 K 线数据
     
-    兼容现有同步代码，内部使用 asyncio.run() 调用异步逻辑。
+    🔥 优化：
+    1. 使用持久化后台事件循环，避免每次创建新循环
+    2. 复用全局 fetcher 实例，避免每次都 load_markets()
+    
+    首次调用会初始化连接（约 0.5-1s），后续调用直接复用（约 0.2-0.4s）
     
     Args:
         tasks: [(symbol, timeframe, limit), ...]
@@ -280,41 +447,90 @@ def fetch_batch_ohlcv_sync(
     
     Returns:
         {(symbol, timeframe): ohlcv_data or None, ...}
-    
-    使用示例：
-        tasks = [
-            ("BTC-USDT-SWAP", "1m", 50),
-            ("ETH-USDT-SWAP", "1m", 50),
-            ("BTC-USDT-SWAP", "5m", 50),
-        ]
-        results = fetch_batch_ohlcv_sync(tasks, api_key, api_secret, passphrase)
-        
-        btc_1m_data = results.get(("BTC-USDT-SWAP", "1m"))
     """
     
     async def _run():
-        async with AsyncMarketFetcher(
+        # 🔥 使用连接池获取复用的 fetcher
+        fetcher = await _get_or_create_fetcher(
             api_key=api_key,
             api_secret=api_secret,
             passphrase=passphrase,
             sandbox=sandbox,
             market_type=market_type,
             max_concurrent=max_concurrent,
-        ) as fetcher:
-            fetch_tasks = [
-                FetchTask(symbol=sym, timeframe=tf, limit=lim)
-                for sym, tf, lim in tasks
-            ]
-            return await fetcher.fetch_batch_ohlcv(fetch_tasks)
+        )
+        
+        fetch_tasks = [
+            FetchTask(symbol=sym, timeframe=tf, limit=lim)
+            for sym, tf, lim in tasks
+        ]
+        return await fetcher.fetch_batch_ohlcv(fetch_tasks)
     
-    # 运行异步代码
-    results = asyncio.run(_run())
+    # 🔥 使用持久化的后台事件循环
+    t0 = time.perf_counter()
+    loop = _get_or_create_loop()
+    t1 = time.perf_counter()
+    
+    # 在后台循环中执行异步任务
+    future = asyncio.run_coroutine_threadsafe(_run(), loop)
+    t2 = time.perf_counter()
+    
+    try:
+        # 等待结果，设置超时
+        results = future.result(timeout=30)
+        t3 = time.perf_counter()
+        
+        # 🔥 详细计时日志
+        loop_time = (t1 - t0) * 1000
+        submit_time = (t2 - t1) * 1000
+        wait_time = (t3 - t2) * 1000
+        total_time = (t3 - t0) * 1000
+        
+        if loop_time > 5 or submit_time > 5:  # 只在有明显开销时打印
+            logger.debug(
+                f"[AsyncFetcher] 同步调用耗时 | "
+                f"获取循环: {loop_time:.1f}ms | 提交任务: {submit_time:.1f}ms | "
+                f"等待结果: {wait_time:.1f}ms | 总计: {total_time:.1f}ms"
+            )
+    except Exception as e:
+        logger.error(f"[AsyncFetcher] 批量获取失败: {e}")
+        # 返回空结果
+        return {(sym, tf): None for sym, tf, _ in tasks}
     
     # 转换为字典格式
     return {
         (r.symbol, r.timeframe): r.data
         for r in results
     }
+
+
+def close_global_fetcher():
+    """
+    🔥 关闭全局 fetcher 实例和后台事件循环（程序退出时调用）
+    """
+    global _global_fetcher, _background_loop
+    
+    if _global_fetcher is not None and _background_loop is not None:
+        async def _close():
+            if _global_fetcher:
+                await _global_fetcher.close()
+        
+        try:
+            future = asyncio.run_coroutine_threadsafe(_close(), _background_loop)
+            future.result(timeout=5)
+        except Exception as e:
+            logger.warning(f"[AsyncFetcher] 关闭全局实例失败: {e}")
+        finally:
+            _global_fetcher = None
+    
+    # 停止后台事件循环
+    if _background_loop is not None and _background_loop.is_running():
+        _background_loop.call_soon_threadsafe(_background_loop.stop)
+        logger.info("[AsyncFetcher] 后台事件循环已停止")
+
+
+# 注册退出时清理
+atexit.register(close_global_fetcher)
 
 
 # ============ 测试入口 ============

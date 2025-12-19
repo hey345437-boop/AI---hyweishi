@@ -67,6 +67,13 @@ class OKXWebSocketClient:
         self.ws: Optional[websocket.WebSocketApp] = None
         self.ws_thread: Optional[threading.Thread] = None
         
+        # 🔥 代理配置（从环境变量读取）
+        import os
+        self.http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+        self.https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        if self.https_proxy:
+            logger.info(f"[WS] 检测到代理配置: {self.https_proxy}")
+        
         # ========== 线程安全机制 ==========
         # [Fix #1] WebSocket 锁：保护 ws.send() / ws.close() 的并发访问
         self.ws_lock = threading.Lock()
@@ -199,10 +206,33 @@ class OKXWebSocketClient:
                 # [Fix #4] 使用内置心跳，移除自定义心跳线程
                 # ping_interval: 每 25 秒自动发送 Ping
                 # ping_timeout: 10 秒内未收到 Pong 则断开
-                self.ws.run_forever(
-                    ping_interval=25,
-                    ping_timeout=10
-                )
+                
+                # 🔥 代理支持：解析代理URL并传递给 run_forever
+                run_kwargs = {
+                    "ping_interval": 25,
+                    "ping_timeout": 10
+                }
+                
+                proxy_url = self.https_proxy or self.http_proxy
+                if proxy_url:
+                    from urllib.parse import urlparse
+                    parsed = urlparse(proxy_url)
+                    if parsed.hostname and parsed.port:
+                        run_kwargs["http_proxy_host"] = parsed.hostname
+                        run_kwargs["http_proxy_port"] = parsed.port
+                        # 🔥 关键：必须指定 proxy_type，否则会报错
+                        # 根据代理URL的scheme确定类型
+                        scheme = parsed.scheme.lower()
+                        if scheme in ('socks5', 'socks5h'):
+                            run_kwargs["proxy_type"] = "socks5"
+                        elif scheme in ('socks4', 'socks4a'):
+                            run_kwargs["proxy_type"] = "socks4"
+                        else:
+                            # http/https 代理
+                            run_kwargs["proxy_type"] = "http"
+                        logger.info(f"[WS] 使用代理连接: {run_kwargs['proxy_type']}://{parsed.hostname}:{parsed.port}")
+                
+                self.ws.run_forever(**run_kwargs)
                 
             except Exception as e:
                 logger.error(f"[WS] 运行异常: {e}")

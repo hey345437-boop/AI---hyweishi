@@ -438,7 +438,9 @@ def render_login(view_model, actions):
             border-radius: 10px !important;
             color: white !important;
             font-weight: 600 !important;
-            padding: 12px 30px !important;
+            padding: 15px 30px !important;
+            font-size: 16px !important;
+            width: 100% !important;
             transition: all 0.3s ease !important;
         }
         .stButton > button:hover {
@@ -667,13 +669,16 @@ def render_login(view_model, actions):
                 value=saved_pwd  # 如果有保存的密码，自动填充
             )
             
-            # 记住密码复选框（右对齐）
+            # 记住密码复选框（右对齐，使用HTML实现）
             col_spacer, col_checkbox = st.columns([3, 1])
             with col_checkbox:
                 remember_pwd = st.checkbox("记住密码", value=True, key="remember_password")
             
+            # 🔥 按钮放在独立容器中，确保宽度100%
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("⚡ 进入系统"):
+            btn_container = st.container()
+            with btn_container:
+                if st.button("⚡ 进入系统", use_container_width=True):
                     # 忽略用户输入两端的意外空白字符后比较
                     if (password_input or '').strip() == ACCESS_PASSWORD:
                         # 🔥 如果勾选了记住密码，保存到 URL 参数（下次访问时自动填充）
@@ -2349,27 +2354,30 @@ def render_dashboard(view_model, actions):
             st.markdown("#### ◉ 交易统计")
             _render_trade_stats_fragment(view_model, actions)
             
-            # 🔥 资金曲线图（OKX风格，可展开）
+            # 🔥 资金曲线图（柱状图+折线图组合，可交互）
             with st.expander("📈 资金曲线", expanded=False):
                 trade_history = actions.get("get_trade_history", lambda limit=50: [])()
                 if trade_history and len(trade_history) > 0:
                     import plotly.graph_objects as go
+                    from plotly.subplots import make_subplots
                     from datetime import datetime
                     
-                    equity_data = []
-                    timestamps = []
-                    cumulative_equity = 200.0
-                    initial_equity = 200.0
+                    # 获取真实权益，反推初始资金
+                    paper_balance_init = actions.get("get_paper_balance", lambda: {})()
+                    current_equity = float(paper_balance_init.get('equity', 200) or 200) if paper_balance_init else 200
+                    
                     sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
                     
-                    # 添加初始点
-                    if sorted_trades:
-                        first_ts = sorted_trades[0].get('ts', 0)
-                        if first_ts > 0:
-                            timestamps.append(datetime.fromtimestamp(first_ts / 1000 - 3600))
-                        else:
-                            timestamps.append(datetime.now())
-                    equity_data.append(cumulative_equity)
+                    # 从交易历史反推初始资金
+                    total_pnl = sum(float(t.get('pnl', 0) or 0) for t in sorted_trades)
+                    initial_equity = current_equity - total_pnl
+                    
+                    # 准备数据
+                    timestamps = []
+                    pnl_values = []
+                    equity_values = []
+                    bar_colors = []
+                    cumulative_equity = initial_equity
                     
                     for trade in sorted_trades:
                         pnl = float(trade.get('pnl', 0) or 0)
@@ -2379,76 +2387,132 @@ def render_dashboard(view_model, actions):
                             timestamps.append(datetime.fromtimestamp(ts / 1000))
                         else:
                             timestamps.append(datetime.now())
-                        equity_data.append(cumulative_equity)
+                        pnl_values.append(pnl)
+                        equity_values.append(cumulative_equity)
+                        bar_colors.append('#00d4aa' if pnl >= 0 else '#ff6b6b')
                     
-                    # 计算收益率
-                    total_return = ((cumulative_equity - initial_equity) / initial_equity) * 100
-                    is_profit = cumulative_equity >= initial_equity
+                    # 创建双Y轴图表
+                    fig = make_subplots(specs=[[{"secondary_y": True}]])
                     
-                    # 颜色配置
-                    line_color = '#00d4aa' if is_profit else '#ff6b6b'
-                    fill_color = 'rgba(0, 212, 170, 0.15)' if is_profit else 'rgba(255, 107, 107, 0.15)'
+                    # 柱状图：单笔盈亏（主Y轴）
+                    fig.add_trace(
+                        go.Bar(
+                            x=timestamps,
+                            y=pnl_values,
+                            name='单笔盈亏',
+                            marker_color=bar_colors,
+                            opacity=0.7,
+                            hovertemplate='%{x|%m-%d %H:%M}<br>盈亏: $%{y:.2f}<extra></extra>'
+                        ),
+                        secondary_y=False
+                    )
                     
-                    # 创建 Plotly 图表
-                    fig = go.Figure()
-                    
-                    # 添加面积图
-                    fig.add_trace(go.Scatter(
-                        x=timestamps,
-                        y=equity_data,
-                        mode='lines',
-                        name='净值',
-                        line=dict(color=line_color, width=2),
-                        fill='tozeroy',
-                        fillcolor=fill_color,
-                        hovertemplate='%{x|%m-%d %H:%M}<br>净值: $%{y:.2f}<extra></extra>'
-                    ))
+                    # 折线图：累计净值（副Y轴）
+                    fig.add_trace(
+                        go.Scatter(
+                            x=timestamps,
+                            y=equity_values,
+                            name='累计净值',
+                            mode='lines+markers',
+                            line=dict(color='#ffd700', width=2),
+                            marker=dict(size=6, color='#ffd700'),
+                            hovertemplate='%{x|%m-%d %H:%M}<br>净值: $%{y:.2f}<extra></extra>'
+                        ),
+                        secondary_y=True
+                    )
                     
                     # 添加初始资金基准线
                     fig.add_hline(
                         y=initial_equity, 
                         line_dash="dash", 
-                        line_color="rgba(255,255,255,0.3)",
+                        line_color="rgba(255,215,0,0.5)",
                         annotation_text=f"初始 ${initial_equity:.0f}",
-                        annotation_position="right"
+                        annotation_position="right",
+                        secondary_y=True
+                    )
+                    
+                    # 添加零线（盈亏分界）
+                    fig.add_hline(
+                        y=0, 
+                        line_dash="dot", 
+                        line_color="rgba(255,255,255,0.3)",
+                        secondary_y=False
                     )
                     
                     # 图表样式
                     fig.update_layout(
-                        height=300,
-                        margin=dict(l=0, r=0, t=30, b=0),
+                        height=400,
+                        margin=dict(l=60, r=60, t=30, b=40),
                         paper_bgcolor='rgba(0,0,0,0)',
                         plot_bgcolor='rgba(0,0,0,0)',
                         font=dict(color='rgba(255,255,255,0.7)', size=11),
                         xaxis=dict(
                             showgrid=False,
-                            showline=False,
-                            tickformat='%m-%d',
+                            showline=True,
+                            linecolor='rgba(255,255,255,0.2)',
+                            tickformat='%m-%d %H:%M',
                             tickfont=dict(size=10)
                         ),
-                        yaxis=dict(
-                            showgrid=True,
-                            gridcolor='rgba(255,255,255,0.1)',
-                            showline=False,
-                            tickprefix='$',
-                            tickfont=dict(size=10)
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="center",
+                            x=0.5,
+                            font=dict(size=10)
                         ),
-                        showlegend=False,
-                        hovermode='x unified'
+                        hovermode='x unified',
+                        bargap=0.3
                     )
                     
-                    # 显示图表
-                    st.plotly_chart(fig, config={'displayModeBar': False})
+                    # 主Y轴（盈亏）
+                    fig.update_yaxes(
+                        title_text="单笔盈亏 ($)",
+                        showgrid=True,
+                        gridcolor='rgba(255,255,255,0.1)',
+                        showline=True,
+                        linecolor='rgba(255,255,255,0.2)',
+                        tickprefix='$',
+                        tickfont=dict(size=10),
+                        secondary_y=False
+                    )
+                    
+                    # 副Y轴（净值）
+                    fig.update_yaxes(
+                        title_text="累计净值 ($)",
+                        showgrid=False,
+                        showline=True,
+                        linecolor='rgba(255,215,0,0.5)',
+                        tickprefix='$',
+                        tickfont=dict(size=10, color='#ffd700'),
+                        secondary_y=True
+                    )
+                    
+                    # 启用缩放和拖动
+                    chart_config = {
+                        'displayModeBar': True,
+                        'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+                        'scrollZoom': True,
+                        'displaylogo': False
+                    }
+                    
+                    st.plotly_chart(fig, use_container_width=True, config=chart_config)
                     
                     # 底部统计
-                    col1, col2, col3 = st.columns(3)
+                    real_return = ((current_equity - initial_equity) / initial_equity) * 100 if initial_equity > 0 else 0
+                    win_trades = sum(1 for p in pnl_values if p > 0)
+                    win_rate = (win_trades / len(pnl_values) * 100) if pnl_values else 0
+                    
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.caption(f"📊 共 {len(sorted_trades)} 笔交易")
+                        st.caption(f"📊 共 {len(sorted_trades)} 笔")
                     with col2:
-                        color = "green" if is_profit else "red"
-                        st.caption(f"📈 收益率: :{color}[{total_return:+.2f}%]")
+                        color = "green" if real_return >= 0 else "red"
+                        st.caption(f"📈 收益: :{color}[{real_return:+.2f}%]")
                     with col3:
-                        st.caption(f"💰 当前: ${cumulative_equity:.2f}")
+                        st.caption(f"🎯 胜率: {win_rate:.1f}%")
+                    with col4:
+                        st.caption(f"💰 净值: ${current_equity:.2f}")
                 else:
                     st.info("暂无交易记录，完成首笔交易后将显示资金曲线")
             

@@ -1957,9 +1957,14 @@ def main():
                 
                 for attempt in range(max_retries + 1):
                     try:
-                        # 🔥 WebSocket 模式已禁用（数据不可靠，订阅经常失败）
-                        # 直接使用 REST 数据源，确保数据准确性
-                        # TODO: 修复 WebSocket 订阅问题后再启用
+                        # 🔥 WebSocket 模式：优先使用 WebSocket 数据（低延迟）
+                        if ws_provider is not None and data_source_mode == 'WebSocket':
+                            ohlcv_data = ws_provider.get_ohlcv(symbol, timeframe=tf, limit=1000)
+                            if ohlcv_data and len(ohlcv_data) > 0:
+                                return symbol, tf, ohlcv_data, False, None
+                            else:
+                                # WebSocket 缓存为空，回退到 REST
+                                logger.debug(f"[WS] {symbol} {tf} 缓存为空，回退到 REST")
                         
                         # REST 数据源
                         if provider is not None:
