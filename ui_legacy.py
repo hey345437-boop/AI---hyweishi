@@ -2363,29 +2363,106 @@ def render_dashboard(view_model, actions):
             st.markdown("#### ◉ 交易统计")
             _render_trade_stats_fragment(view_model, actions)
             
-            # 🔥 资金曲线图（可展开，不需要实时刷新）
+            # 🔥 资金曲线图（OKX风格，可展开）
             with st.expander("📈 资金曲线", expanded=False):
                 trade_history = actions.get("get_trade_history", lambda limit=50: [])()
                 if trade_history and len(trade_history) > 0:
-                    equity_data = []
-                    cumulative_equity = 200.0
-                    sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
-                    equity_data.append({'时间': '初始', '净值': cumulative_equity})
+                    import plotly.graph_objects as go
+                    from datetime import datetime
                     
-                    for i, trade in enumerate(sorted_trades):
+                    equity_data = []
+                    timestamps = []
+                    cumulative_equity = 200.0
+                    initial_equity = 200.0
+                    sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
+                    
+                    # 添加初始点
+                    if sorted_trades:
+                        first_ts = sorted_trades[0].get('ts', 0)
+                        if first_ts > 0:
+                            timestamps.append(datetime.fromtimestamp(first_ts / 1000 - 3600))
+                        else:
+                            timestamps.append(datetime.now())
+                    equity_data.append(cumulative_equity)
+                    
+                    for trade in sorted_trades:
                         pnl = float(trade.get('pnl', 0) or 0)
                         cumulative_equity += pnl
                         ts = trade.get('ts', 0)
                         if ts > 0:
-                            from datetime import datetime
-                            time_str = datetime.fromtimestamp(ts / 1000).strftime('%m-%d %H:%M')
+                            timestamps.append(datetime.fromtimestamp(ts / 1000))
                         else:
-                            time_str = f"交易{i+1}"
-                        equity_data.append({'时间': time_str, '净值': cumulative_equity})
+                            timestamps.append(datetime.now())
+                        equity_data.append(cumulative_equity)
                     
-                    df_equity = pd.DataFrame(equity_data)
-                    st.line_chart(df_equity.set_index('时间')['净值'])
-                    st.caption(f"共 {len(sorted_trades)} 笔交易")
+                    # 计算收益率
+                    total_return = ((cumulative_equity - initial_equity) / initial_equity) * 100
+                    is_profit = cumulative_equity >= initial_equity
+                    
+                    # 颜色配置
+                    line_color = '#00d4aa' if is_profit else '#ff6b6b'
+                    fill_color = 'rgba(0, 212, 170, 0.15)' if is_profit else 'rgba(255, 107, 107, 0.15)'
+                    
+                    # 创建 Plotly 图表
+                    fig = go.Figure()
+                    
+                    # 添加面积图
+                    fig.add_trace(go.Scatter(
+                        x=timestamps,
+                        y=equity_data,
+                        mode='lines',
+                        name='净值',
+                        line=dict(color=line_color, width=2),
+                        fill='tozeroy',
+                        fillcolor=fill_color,
+                        hovertemplate='%{x|%m-%d %H:%M}<br>净值: $%{y:.2f}<extra></extra>'
+                    ))
+                    
+                    # 添加初始资金基准线
+                    fig.add_hline(
+                        y=initial_equity, 
+                        line_dash="dash", 
+                        line_color="rgba(255,255,255,0.3)",
+                        annotation_text=f"初始 ${initial_equity:.0f}",
+                        annotation_position="right"
+                    )
+                    
+                    # 图表样式
+                    fig.update_layout(
+                        height=300,
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color='rgba(255,255,255,0.7)', size=11),
+                        xaxis=dict(
+                            showgrid=False,
+                            showline=False,
+                            tickformat='%m-%d',
+                            tickfont=dict(size=10)
+                        ),
+                        yaxis=dict(
+                            showgrid=True,
+                            gridcolor='rgba(255,255,255,0.1)',
+                            showline=False,
+                            tickprefix='$',
+                            tickfont=dict(size=10)
+                        ),
+                        showlegend=False,
+                        hovermode='x unified'
+                    )
+                    
+                    # 显示图表
+                    st.plotly_chart(fig, config={'displayModeBar': False})
+                    
+                    # 底部统计
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.caption(f"📊 共 {len(sorted_trades)} 笔交易")
+                    with col2:
+                        color = "green" if is_profit else "red"
+                        st.caption(f"📈 收益率: :{color}[{total_return:+.2f}%]")
+                    with col3:
+                        st.caption(f"💰 当前: ${cumulative_equity:.2f}")
                 else:
                     st.info("暂无交易记录，完成首笔交易后将显示资金曲线")
             
