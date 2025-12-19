@@ -1562,7 +1562,7 @@ def main():
                         # 🔥 在删除持仓之前，先用最新价格更新 equity
                         if flatten_tickers and (paper_positions or hedge_positions_list):
                             try:
-                                update_positions_with_prices(flatten_tickers, max_lev)
+                                mark_to_market_paper_positions(flatten_tickers, leverage=max_lev)
                                 logger.debug("紧急平仓: 已用最新价格更新 equity")
                             except Exception as e:
                                 logger.warning(f"更新 equity 失败: {e}")
@@ -1585,26 +1585,54 @@ def main():
                                 if qty > 0 and entry_price > 0:
                                     try:
                                         # 获取当前价格
-                                        current_price = entry_price
+                                        current_price = None
+                                        price_source = "unknown"
+                                        
                                         if symbol in flatten_tickers:
                                             ticker_data = flatten_tickers[symbol]
-                                            current_price = float(ticker_data.get('last', entry_price) or entry_price)
-                                        else:
+                                            fetched_price = ticker_data.get('last')
+                                            if fetched_price and float(fetched_price) > 0:
+                                                current_price = float(fetched_price)
+                                                price_source = "batch_ticker"
+                                        
+                                        if current_price is None:
                                             # 🔥 尝试直接从provider获取单个价格
                                             logger.warning(f"紧急平仓: {symbol} 不在批量价格中，尝试单独获取")
                                             if provider:
                                                 try:
                                                     single_ticker = provider.fetch_ticker(symbol)
                                                     if single_ticker:
-                                                        current_price = float(single_ticker.get('last', entry_price) or entry_price)
-                                                except Exception:
-                                                    pass
+                                                        fetched_price = single_ticker.get('last')
+                                                        if fetched_price and float(fetched_price) > 0:
+                                                            current_price = float(fetched_price)
+                                                            price_source = "single_ticker"
+                                                except Exception as e:
+                                                    logger.warning(f"单独获取价格失败: {e}")
+                                        
+                                        # 🔥 如果仍然没有价格，使用持仓中的 unrealized_pnl 反推
+                                        if current_price is None:
+                                            unrealized_pnl = float(pos.get('unrealized_pnl', 0) or 0)
+                                            if unrealized_pnl != 0:
+                                                # 反推价格: pnl = (current - entry) * qty for long
+                                                if pos_side == 'long':
+                                                    current_price = entry_price + (unrealized_pnl / qty)
+                                                else:
+                                                    current_price = entry_price - (unrealized_pnl / qty)
+                                                price_source = "unrealized_pnl"
+                                                logger.warning(f"紧急平仓: {symbol} 使用 unrealized_pnl 反推价格: {current_price:.4f}")
+                                            else:
+                                                # 最后的回退：使用入场价（pnl=0）
+                                                current_price = entry_price
+                                                price_source = "entry_price_fallback"
+                                                logger.error(f"紧急平仓: {symbol} 无法获取价格，使用入场价（PnL将为0）")
                                         
                                         # 计算盈亏
                                         if pos_side == 'long':
                                             pnl = (current_price - entry_price) * qty
                                         else:
                                             pnl = (entry_price - current_price) * qty
+                                        
+                                        logger.debug(f"紧急平仓 {symbol}: entry={entry_price}, exit={current_price}, pnl={pnl:.2f}, source={price_source}")
                                         
                                         total_pnl += pnl
                                         margin = (qty * entry_price) / max_lev
@@ -1647,26 +1675,50 @@ def main():
                                 
                                 if hedge_id and qty > 0 and entry_price > 0:
                                     try:
-                                        # 获取当前价格
-                                        current_price = entry_price
+                                        # 获取当前价格（与主仓相同的逻辑）
+                                        current_price = None
+                                        price_source = "unknown"
+                                        
                                         if symbol in flatten_tickers:
                                             ticker_data = flatten_tickers[symbol]
-                                            current_price = float(ticker_data.get('last', entry_price) or entry_price)
-                                        else:
-                                            # 🔥 尝试直接从provider获取单个价格
-                                            if provider:
-                                                try:
-                                                    single_ticker = provider.fetch_ticker(symbol)
-                                                    if single_ticker:
-                                                        current_price = float(single_ticker.get('last', entry_price) or entry_price)
-                                                except Exception:
-                                                    pass
+                                            fetched_price = ticker_data.get('last')
+                                            if fetched_price and float(fetched_price) > 0:
+                                                current_price = float(fetched_price)
+                                                price_source = "batch_ticker"
+                                        
+                                        if current_price is None and provider:
+                                            try:
+                                                single_ticker = provider.fetch_ticker(symbol)
+                                                if single_ticker:
+                                                    fetched_price = single_ticker.get('last')
+                                                    if fetched_price and float(fetched_price) > 0:
+                                                        current_price = float(fetched_price)
+                                                        price_source = "single_ticker"
+                                            except Exception as e:
+                                                logger.warning(f"单独获取价格失败: {e}")
+                                        
+                                        # 🔥 如果仍然没有价格，使用持仓中的 unrealized_pnl 反推
+                                        if current_price is None:
+                                            unrealized_pnl = float(hedge_pos.get('unrealized_pnl', 0) or 0)
+                                            if unrealized_pnl != 0:
+                                                if pos_side == 'long':
+                                                    current_price = entry_price + (unrealized_pnl / qty)
+                                                else:
+                                                    current_price = entry_price - (unrealized_pnl / qty)
+                                                price_source = "unrealized_pnl"
+                                                logger.warning(f"紧急平仓-对冲: {symbol} 使用 unrealized_pnl 反推价格")
+                                            else:
+                                                current_price = entry_price
+                                                price_source = "entry_price_fallback"
+                                                logger.error(f"紧急平仓-对冲: {symbol} 无法获取价格，使用入场价")
                                         
                                         # 计算盈亏
                                         if pos_side == 'long':
                                             pnl = (current_price - entry_price) * qty
                                         else:
                                             pnl = (entry_price - current_price) * qty
+                                        
+                                        logger.debug(f"紧急平仓-对冲 {symbol}: entry={entry_price}, exit={current_price}, pnl={pnl:.2f}, source={price_source}")
                                         
                                         total_pnl += pnl
                                         margin = (qty * entry_price) / max_lev
