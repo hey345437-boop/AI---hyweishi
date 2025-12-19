@@ -1442,18 +1442,14 @@ def render_sidebar(view_model, actions):
         if st.session_state.data_source_mode == "REST":
             st.caption("📌 稳定优先，抗网络波动，适合大多数场景")
         else:
-            st.markdown(":red[⚠️ WebSocket 模式对网络稳定性要求极高！]")
-            st.caption("低延迟但易断连，建议仅在网络稳定时使用")
+            st.markdown(":red[⚠️ WebSocket 模式暂时禁用，后端强制使用 REST]")
+            st.caption("WebSocket 订阅存在问题，可能导致信号丢失，已临时禁用")
             # 🔥 显示 WebSocket 连接状态（从数据库读取后端状态）
             try:
                 from db_bridge import get_ws_status
                 ws_status = get_ws_status()
-                if ws_status.get('connected'):
-                    st.success("🟢 WebSocket 已连接")
-                    st.caption(f"订阅数: {ws_status.get('subscriptions', 0)} | K线缓存: {ws_status.get('candle_cache_count', 0)}")
-                else:
-                    st.warning("🟡 WebSocket 未连接")
-                    st.caption("后端 WebSocket 未连接，请检查后端是否启动")
+                st.warning("⚠️ 后端已强制使用 REST 模式")
+                st.caption("WebSocket 订阅不稳定，为确保信号准确性已禁用")
             except ImportError:
                 st.info("💡 WebSocket 状态读取失败")
         

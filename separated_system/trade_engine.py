@@ -1957,13 +1957,9 @@ def main():
                 
                 for attempt in range(max_retries + 1):
                     try:
-                        # 🔥 优先使用 WebSocket 数据源（如果可用）
-                        if ws_provider is not None and ws_provider.is_connected():
-                            ohlcv_data, is_from_ws = ws_provider.get_ohlcv(
-                                symbol, timeframe=tf, limit=1000, fallback_to_rest=True
-                            )
-                            if ohlcv_data and len(ohlcv_data) > 0:
-                                return symbol, tf, ohlcv_data, False, None
+                        # 🔥 WebSocket 模式已禁用（数据不可靠，订阅经常失败）
+                        # 直接使用 REST 数据源，确保数据准确性
+                        # TODO: 修复 WebSocket 订阅问题后再启用
                         
                         # REST 数据源
                         if provider is not None:
