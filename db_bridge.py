@@ -763,6 +763,24 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                 except Exception:
                     pass
             
+            # === 列迁移：为旧 engine_status 表添加 WebSocket 状态字段 ===
+            cursor.execute("PRAGMA table_info(engine_status)")
+            es_existing_columns = {row[1] for row in cursor.fetchall()}
+            
+            es_new_columns = {
+                'ws_connected': "INTEGER DEFAULT 0",
+                'ws_subscriptions': "INTEGER DEFAULT 0",
+                'ws_candle_cache_count': "INTEGER DEFAULT 0",
+                'ws_last_update': "INTEGER DEFAULT 0",
+            }
+            
+            for col_name, col_def in es_new_columns.items():
+                if col_name not in es_existing_columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE engine_status ADD COLUMN {col_name} {col_def}")
+                    except Exception:
+                        pass
+            
             # 注意：paper_balance 表的迁移已移到 INSERT 之前执行
         
         conn.commit()
@@ -1167,6 +1185,51 @@ def update_engine_status(db_config: Optional[Dict[str, Any]] = None, **status) -
         conn.commit()
     finally:
         conn.close()
+
+
+def update_ws_status(
+    connected: bool = False,
+    subscriptions: int = 0,
+    candle_cache_count: int = 0,
+    db_config: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    更新 WebSocket 状态到数据库（后端调用）
+    
+    Args:
+        connected: 是否已连接
+        subscriptions: 订阅数量
+        candle_cache_count: K线缓存数量
+        db_config: 数据库配置
+    """
+    update_engine_status(
+        db_config=db_config,
+        ws_connected=1 if connected else 0,
+        ws_subscriptions=subscriptions,
+        ws_candle_cache_count=candle_cache_count,
+        ws_last_update=int(time.time() * 1000)
+    )
+
+
+def get_ws_status(db_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    获取 WebSocket 状态（UI 调用）
+    
+    Returns:
+        {
+            'connected': bool,
+            'subscriptions': int,
+            'candle_cache_count': int,
+            'last_update': int (ms timestamp)
+        }
+    """
+    status = get_engine_status(db_config)
+    return {
+        'connected': status.get('ws_connected', 0) == 1,
+        'subscriptions': status.get('ws_subscriptions', 0),
+        'candle_cache_count': status.get('ws_candle_cache_count', 0),
+        'last_update': status.get('ws_last_update', 0)
+    }
 
 
 def get_paper_balance(db_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

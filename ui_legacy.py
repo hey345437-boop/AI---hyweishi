@@ -1444,28 +1444,18 @@ def render_sidebar(view_model, actions):
         else:
             st.markdown(":red[⚠️ WebSocket 模式对网络稳定性要求极高！]")
             st.caption("低延迟但易断连，建议仅在网络稳定时使用")
-            # 🔥 显示 WebSocket 连接状态
+            # 🔥 显示 WebSocket 连接状态（从数据库读取后端状态）
             try:
-                from okx_websocket import get_ws_client, is_ws_available, start_ws_client
-                if is_ws_available():
-                    ws_client = get_ws_client()
-                    if ws_client and ws_client.is_connected():
-                        st.success("🟢 WebSocket 已连接")
-                        stats = ws_client.get_cache_stats()
-                        st.caption(f"订阅数: {stats.get('subscriptions', 0)} | K线缓存: {len(stats.get('candle_cache', {}))}")
-                    else:
-                        st.warning("🟡 WebSocket 未连接")
-                        if st.button("🔌 连接 WebSocket", key="ws_connect_btn"):
-                            if start_ws_client():
-                                st.success("连接成功！")
-                                time.sleep(0.5)
-                                st.rerun()
-                            else:
-                                st.error("连接失败，请检查网络")
+                from db_bridge import get_ws_status
+                ws_status = get_ws_status()
+                if ws_status.get('connected'):
+                    st.success("🟢 WebSocket 已连接")
+                    st.caption(f"订阅数: {ws_status.get('subscriptions', 0)} | K线缓存: {ws_status.get('candle_cache_count', 0)}")
                 else:
-                    st.info("💡 请安装 websocket-client: pip install websocket-client")
+                    st.warning("🟡 WebSocket 未连接")
+                    st.caption("后端 WebSocket 未连接，请检查后端是否启动")
             except ImportError:
-                st.info("💡 WebSocket 模块加载失败")
+                st.info("💡 WebSocket 状态读取失败")
         
         # 资产概览已移至侧边栏顶部, 此处不再重复显示
         # API 隔离状态已整合到"API 密钥管理"面板中

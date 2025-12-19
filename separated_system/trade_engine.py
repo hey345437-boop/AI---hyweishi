@@ -111,7 +111,9 @@ from db_bridge import (
     # P2修复: 信号缓存持久化
     get_signal_cache, set_signal_cache, load_all_signal_cache, clear_signal_cache_db,
     # 🔥 交易历史记录
-    insert_trade_history
+    insert_trade_history,
+    # 🔥 WebSocket 状态同步
+    update_ws_status
 )
 from logging_utils import setup_logger, get_logger, render_scan_block, render_idle_block, render_risk_check
 from exchange_adapters.factory import ExchangeAdapterFactory
@@ -2931,6 +2933,21 @@ def main():
                 pause_trading=pause_trading,
                 last_plan_order_json=plan_order_json
             )
+            
+            # 🔥 更新 WebSocket 状态到数据库（供 UI 读取）
+            try:
+                if ws_provider is not None:
+                    ws_connected = ws_provider.is_connected()
+                    ws_stats = ws_provider.ws_client.get_cache_stats() if ws_provider.ws_client else {}
+                    update_ws_status(
+                        connected=ws_connected,
+                        subscriptions=ws_stats.get('subscriptions', 0),
+                        candle_cache_count=len(ws_stats.get('candle_cache', {}))
+                    )
+                else:
+                    update_ws_status(connected=False, subscriptions=0, candle_cache_count=0)
+            except Exception:
+                pass  # 静默处理，不影响主循环
             
             try:
                 # 记录性能指标
