@@ -564,6 +564,50 @@ class OkxClient:
             logger.error(f"Exchange error cancelling order: {e}")
             raise
     
+    def set_leverage(
+        self,
+        symbol: str,
+        leverage: int,
+        margin_mode: str = 'cross',
+        pos_side: str = 'long'
+    ) -> Dict[str, Any]:
+        """
+        设置杠杆倍数
+        
+        Args:
+            symbol: 交易对，如 'BTC/USDT:USDT'
+            leverage: 杠杆倍数 (1-125，具体取决于交易对)
+            margin_mode: 保证金模式 'cross'(全仓) 或 'isolated'(逐仓)
+            pos_side: 持仓方向 'long' 或 'short'
+        
+        Returns:
+            设置结果
+        
+        Raises:
+            RuntimeError: live_test 模式禁止设置杠杆
+        """
+        self._check_action("trade_create_order")  # 使用相同的权限检查
+        
+        if self.config.mode == Mode.LIVE_TEST:
+            raise RuntimeError("live_test mode prohibits leverage setting")
+        
+        try:
+            # OKX 需要先设置保证金模式
+            # ccxt 的 set_leverage 方法
+            result = self.private_exchange.set_leverage(
+                leverage,
+                symbol,
+                params={
+                    'mgnMode': margin_mode,  # cross 或 isolated
+                    'posSide': pos_side  # long 或 short
+                }
+            )
+            logger.info(f"Set leverage for {symbol}: {leverage}x ({margin_mode}, {pos_side})")
+            return result
+        except ExchangeError as e:
+            logger.error(f"Exchange error setting leverage: {e}")
+            raise
+    
     # ========================================================================
     # 便捷方法
     # ========================================================================

@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import time
 import requests
@@ -324,6 +324,109 @@ def clear_realtime_cache():
     except Exception:
         pass
 
+
+def plot_nofx_equity_curve(timestamps, equity_values, initial_equity=None):
+    """
+    NOFX 风格金色渐变资金曲线图表 + 专业级交互控制
+    
+    特点：
+    1. 金色填充到0轴 (#F7D154)
+    2. Y轴在右侧，虚线网格
+    3. 透明背景
+    4. 滚轮缩放 + 平移模式
+    5. 底部 Rangeslider 缩放滑块
+    6. 快捷时间按钮 (1H, 6H, 12H, 1D, All)
+    """
+    if not HAS_PLOTLY:
+        st.warning("请安装 plotly: pip install plotly")
+        return
+    
+    if not timestamps or not equity_values:
+        st.info("暂无资金曲线数据")
+        return
+    
+    fig = go.Figure()
+    
+    # 主曲线 - 金色填充到0轴
+    fig.add_trace(go.Scatter(
+        x=timestamps,
+        y=equity_values,
+        mode='lines',
+        name='净值',
+        line=dict(color='#F7D154', width=2),
+        fill='tozeroy',
+        fillcolor='rgba(247, 209, 84, 0.1)',
+    ))
+    
+    # 布局 - NOFX 极简风格 + 专业交互
+    fig.update_layout(
+        template='plotly_dark',
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        margin=dict(l=0, r=0, t=40, b=10),
+        height=350,
+        showlegend=False,
+        hovermode='x unified',
+        dragmode='pan',  # 默认平移模式
+        
+        # X轴配置 - 带 Rangeslider 和快捷按钮
+        xaxis=dict(
+            showgrid=False,
+            showline=False,
+            tickformat='%m-%d %H:%M',
+            # 底部缩放滑块
+            rangeslider=dict(
+                visible=True,
+                thickness=0.08,
+                bgcolor='rgba(30,30,30,0.5)',
+                bordercolor='rgba(128,128,128,0.3)',
+                borderwidth=1,
+            ),
+            # 快捷时间按钮
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1, label='1H', step='hour', stepmode='backward'),
+                    dict(count=6, label='6H', step='hour', stepmode='backward'),
+                    dict(count=12, label='12H', step='hour', stepmode='backward'),
+                    dict(count=1, label='1D', step='day', stepmode='backward'),
+                    dict(step='all', label='All'),
+                ],
+                bgcolor='rgba(40,40,40,0.8)',
+                activecolor='#F7D154',
+                bordercolor='rgba(128,128,128,0.3)',
+                borderwidth=1,
+                font=dict(color='white', size=11),
+                x=0,
+                y=1.12,
+            ),
+        ),
+        
+        # Y轴配置
+        yaxis=dict(
+            side='right',
+            showgrid=True,
+            gridcolor='rgba(128,128,128,0.2)',
+            gridwidth=1,
+            griddash='dot',
+            tickprefix='$',
+            fixedrange=False,  # 允许Y轴缩放
+        ),
+    )
+    
+    # 渲染图表 - 专业交互配置
+    st.plotly_chart(fig, width="stretch", config={
+        'scrollZoom': True,  # 滚轮缩放
+        'displayModeBar': True,
+        'displaylogo': False,  # 隐藏 Plotly logo
+        'modeBarButtonsToRemove': [
+            'lasso2d', 'select2d', 'autoScale2d',
+            'hoverClosestCartesian', 'hoverCompareCartesian',
+            'toggleSpikelines', 'zoom2d', 'zoomIn2d', 'zoomOut2d'
+        ],
+        'modeBarButtonsToAdd': [],
+        # 只保留: 复位(resetScale2d) + 截图(toImage) + 平移(pan2d)
+    })
+
 # ACCESS_PASSWORD 从环境变量读取, 支持开发模式默认密码
 from env_validator import EnvironmentValidator
 
@@ -471,6 +574,25 @@ def render_login(view_model, actions):
             0% { background-position: 0% 50%; }
             50% { background-position: 100% 50%; }
             100% { background-position: 0% 50%; }
+        }
+        
+        /* 顶部导航栏背景统一 */
+        header[data-testid="stHeader"] {
+            background: linear-gradient(135deg, 
+                rgba(15, 12, 41, 0.98) 0%, 
+                rgba(48, 43, 99, 0.95) 50%,
+                rgba(36, 36, 62, 0.98) 100%) !important;
+            backdrop-filter: blur(10px) !important;
+        }
+        
+        .stApp > header {
+            background: linear-gradient(135deg, 
+                rgba(15, 12, 41, 0.98) 0%, 
+                rgba(48, 43, 99, 0.95) 100%) !important;
+        }
+        
+        .stAppHeader, .stToolbar {
+            background: transparent !important;
         }
         
         /* ✨ 星空粒子效果 */
@@ -678,7 +800,7 @@ def render_login(view_model, actions):
             st.markdown("<br>", unsafe_allow_html=True)
             btn_container = st.container()
             with btn_container:
-                if st.button("⚡ 进入系统", use_container_width=True):
+                if st.button("⚡ 进入系统", width="stretch"):
                     # 忽略用户输入两端的意外空白字符后比较
                     if (password_input or '').strip() == ACCESS_PASSWORD:
                         # 🔥 如果勾选了记住密码，保存到 URL 参数（下次访问时自动填充）
@@ -838,6 +960,77 @@ def render_sidebar(view_model, actions):
                 box-shadow: 0 0 10px {status_color};
             "></div>
             <span style="color: {status_color}; font-size: 13px; font-weight: 500;">{status_text}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # ============ 🔥 AI 决策交易模式切换 ============
+        # 粉色渐变风格按钮
+        arena_mode = st.session_state.get('arena_mode', False)
+        
+        # 注入粉色按钮样式
+        st.markdown("""
+        <style>
+        /* AI 决策交易按钮 - 粉色渐变风格 */
+        .ai-arena-btn {
+            background: linear-gradient(135deg, #ff6b9d 0%, #c44569 50%, #ff6b9d 100%);
+            background-size: 200% 200%;
+            animation: pinkGradient 3s ease infinite;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(255, 107, 157, 0.4);
+        }
+        .ai-arena-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(255, 107, 157, 0.6);
+        }
+        @keyframes pinkGradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        .ai-arena-btn-text {
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .ai-arena-btn-icon {
+            font-size: 18px;
+        }
+        /* 激活状态 */
+        .ai-arena-btn.active {
+            background: linear-gradient(135deg, #00d4aa 0%, #00b894 50%, #00d4aa 100%);
+            box-shadow: 0 4px 20px rgba(0, 212, 170, 0.4);
+        }
+        .ai-arena-btn.active:hover {
+            box-shadow: 0 6px 25px rgba(0, 212, 170, 0.6);
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # AI 决策交易切换按钮（简洁版）
+        btn_key = "ai_arena_switch_btn"
+        
+        if st.button("AI 决策交易", key=btn_key, width="stretch", type="primary"):
+            st.session_state.arena_mode = True
+            st.rerun()
+        
+        # 按钮下方注释
+        st.markdown("""
+        <div style="
+            text-align: center;
+            margin-top: -8px;
+            margin-bottom: 12px;
+        ">
+            <span style="color: #718096; font-size: 11px;">点击后切换为 AI 交易</span>
         </div>
         """, unsafe_allow_html=True)
         
@@ -2229,7 +2422,101 @@ def render_dashboard(view_model, actions):
     env_mode = st.session_state.get('env_mode', view_model.get("env_mode", "● 实盘"))
     
     # 主页面布局
-    col_main, col_chat = st.columns([7, 3])
+    col_main, col_right = st.columns([7, 3])
+    
+    # ========== 右侧装饰图片（固定在右侧，半渐变融入黑色背景） ==========
+    # 使用固定定位，不占用列空间
+    st.markdown("""
+    <style>
+    /* 右侧装饰图片容器 - 固定定位覆盖右侧空白区域 */
+    .deco-image-wrapper {
+        position: fixed;
+        top: 0;
+        right: 0;
+        width: 18%;
+        height: 100vh;
+        overflow: hidden;
+        z-index: 0;
+        pointer-events: none;
+    }
+    
+    /* 装饰图片 */
+    .deco-image-wrapper .deco-image {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center top;
+        opacity: 0.9;
+    }
+    
+    /* 左侧黑色渐变遮罩 */
+    .deco-image-wrapper .deco-overlay-left {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 60%;
+        height: 100%;
+        background: linear-gradient(to right, 
+            rgba(14, 17, 23, 1) 0%,
+            rgba(14, 17, 23, 0.95) 30%,
+            rgba(14, 17, 23, 0.7) 60%,
+            transparent 100%);
+        z-index: 2;
+        pointer-events: none;
+    }
+    
+    /* 顶部黑色渐变 */
+    .deco-image-wrapper .deco-overlay-top {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 80px;
+        background: linear-gradient(to bottom, 
+            rgba(14, 17, 23, 1) 0%, 
+            rgba(14, 17, 23, 0.5) 60%,
+            transparent 100%);
+        z-index: 3;
+        pointer-events: none;
+    }
+    
+    /* 底部黑色渐变 */
+    .deco-image-wrapper .deco-overlay-bottom {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 120px;
+        background: linear-gradient(to top, 
+            rgba(14, 17, 23, 1) 0%, 
+            rgba(14, 17, 23, 0.6) 50%,
+            transparent 100%);
+        z-index: 3;
+        pointer-events: none;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # 加载并显示装饰图片
+    import base64
+    import os
+    
+    deco_image_path = "assets/deco_samurai.png"
+    if os.path.exists(deco_image_path):
+        with open(deco_image_path, "rb") as f:
+            img_data = base64.b64encode(f.read()).decode()
+        st.markdown(f"""
+        <div class="deco-image-wrapper">
+            <img class="deco-image" src="data:image/png;base64,{img_data}" alt=""/>
+            <div class="deco-overlay-left"></div>
+            <div class="deco-overlay-top"></div>
+            <div class="deco-overlay-bottom"></div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # 右侧列保持空白（图片已通过固定定位显示）
+    with col_right:
+        pass
     
     with col_main:
         # 🔥 实盘监控卡片（使用 fragment 局部刷新）
@@ -2354,17 +2641,15 @@ def render_dashboard(view_model, actions):
             st.markdown("#### ◉ 交易统计")
             _render_trade_stats_fragment(view_model, actions)
             
-            # 🔥 资金曲线图（柱状图+折线图组合，可交互）
+            # 🔥 资金曲线图 - NOFX 金色渐变风格
             with st.expander("📈 资金曲线", expanded=False):
                 trade_history = actions.get("get_trade_history", lambda limit=50: [])()
                 if trade_history and len(trade_history) > 0:
-                    import plotly.graph_objects as go
-                    from plotly.subplots import make_subplots
                     from datetime import datetime
                     
                     # 获取真实权益，反推初始资金
                     paper_balance_init = actions.get("get_paper_balance", lambda: {})()
-                    current_equity = float(paper_balance_init.get('equity', 200) or 200) if paper_balance_init else 200
+                    current_equity = float(paper_balance_init.get('equity', 208) or 208) if paper_balance_init else 208
                     
                     sorted_trades = sorted(trade_history, key=lambda x: x.get('ts', 0))
                     
@@ -2376,7 +2661,6 @@ def render_dashboard(view_model, actions):
                     timestamps = []
                     pnl_values = []
                     equity_values = []
-                    bar_colors = []
                     cumulative_equity = initial_equity
                     
                     for trade in sorted_trades:
@@ -2389,114 +2673,9 @@ def render_dashboard(view_model, actions):
                             timestamps.append(datetime.now())
                         pnl_values.append(pnl)
                         equity_values.append(cumulative_equity)
-                        bar_colors.append('#00d4aa' if pnl >= 0 else '#ff6b6b')
                     
-                    # 创建双Y轴图表
-                    fig = make_subplots(specs=[[{"secondary_y": True}]])
-                    
-                    # 柱状图：单笔盈亏（主Y轴）
-                    fig.add_trace(
-                        go.Bar(
-                            x=timestamps,
-                            y=pnl_values,
-                            name='单笔盈亏',
-                            marker_color=bar_colors,
-                            opacity=0.7,
-                            hovertemplate='%{x|%m-%d %H:%M}<br>盈亏: $%{y:.2f}<extra></extra>'
-                        ),
-                        secondary_y=False
-                    )
-                    
-                    # 折线图：累计净值（副Y轴）
-                    fig.add_trace(
-                        go.Scatter(
-                            x=timestamps,
-                            y=equity_values,
-                            name='累计净值',
-                            mode='lines+markers',
-                            line=dict(color='#ffd700', width=2),
-                            marker=dict(size=6, color='#ffd700'),
-                            hovertemplate='%{x|%m-%d %H:%M}<br>净值: $%{y:.2f}<extra></extra>'
-                        ),
-                        secondary_y=True
-                    )
-                    
-                    # 添加初始资金基准线
-                    fig.add_hline(
-                        y=initial_equity, 
-                        line_dash="dash", 
-                        line_color="rgba(255,215,0,0.5)",
-                        annotation_text=f"初始 ${initial_equity:.0f}",
-                        annotation_position="right",
-                        secondary_y=True
-                    )
-                    
-                    # 添加零线（盈亏分界）
-                    fig.add_hline(
-                        y=0, 
-                        line_dash="dot", 
-                        line_color="rgba(255,255,255,0.3)",
-                        secondary_y=False
-                    )
-                    
-                    # 图表样式
-                    fig.update_layout(
-                        height=400,
-                        margin=dict(l=60, r=60, t=30, b=40),
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='rgba(255,255,255,0.7)', size=11),
-                        xaxis=dict(
-                            showgrid=False,
-                            showline=True,
-                            linecolor='rgba(255,255,255,0.2)',
-                            tickformat='%m-%d %H:%M',
-                            tickfont=dict(size=10)
-                        ),
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="center",
-                            x=0.5,
-                            font=dict(size=10)
-                        ),
-                        hovermode='x unified',
-                        bargap=0.3
-                    )
-                    
-                    # 主Y轴（盈亏）
-                    fig.update_yaxes(
-                        title_text="单笔盈亏 ($)",
-                        showgrid=True,
-                        gridcolor='rgba(255,255,255,0.1)',
-                        showline=True,
-                        linecolor='rgba(255,255,255,0.2)',
-                        tickprefix='$',
-                        tickfont=dict(size=10),
-                        secondary_y=False
-                    )
-                    
-                    # 副Y轴（净值）
-                    fig.update_yaxes(
-                        title_text="累计净值 ($)",
-                        showgrid=False,
-                        showline=True,
-                        linecolor='rgba(255,215,0,0.5)',
-                        tickprefix='$',
-                        tickfont=dict(size=10, color='#ffd700'),
-                        secondary_y=True
-                    )
-                    
-                    # 启用缩放和拖动
-                    chart_config = {
-                        'displayModeBar': True,
-                        'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
-                        'scrollZoom': True,
-                        'displaylogo': False
-                    }
-                    
-                    st.plotly_chart(fig, use_container_width=True, config=chart_config)
+                    # 🔥 使用 NOFX 金色渐变风格渲染资金曲线
+                    plot_nofx_equity_curve(timestamps, equity_values, initial_equity)
                     
                     # 底部统计
                     real_return = ((current_equity - initial_equity) / initial_equity) * 100 if initial_equity > 0 else 0

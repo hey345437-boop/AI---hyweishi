@@ -1392,13 +1392,13 @@ def main():
             if enable_trading != 1:
                 update_engine_status(alive=1, pause_trading=0)
                 if previous_state != "idle":
-                    render_idle_block(now.strftime('%H:%M:%S'), "交易功能已禁用，仅执行止盈检查", logger)
+                    render_idle_block(now.strftime('%H:%M:%S'), "交易功能已禁用，扫描已停止", logger)
                     previous_state = "idle"
                 _prev_enable_trading = 0
             elif pause_trading == 1:
                 update_engine_status(alive=1, pause_trading=1)
                 if previous_state != "paused":
-                    render_idle_block(now.strftime('%H:%M:%S'), "交易已暂停，仅执行止盈检查", logger)
+                    render_idle_block(now.strftime('%H:%M:%S'), "交易已暂停，扫描已停止", logger)
                     previous_state = "paused"
             else:
                 if previous_state != "running":
@@ -1479,6 +1479,11 @@ def main():
             due_timeframes = get_due_timeframes(now.minute, supported_timeframes)
             
             if not due_timeframes:
+                continue
+            
+            # 🔥 交易未启用时，跳过扫描（避免与 AI 系统的 API 冲突）
+            # 不再获取 K 线数据和执行信号计算
+            if not trading_enabled:
                 continue
             
             # 🔥 收集扫描数据，最后统一输出

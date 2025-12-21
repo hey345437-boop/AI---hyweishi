@@ -79,6 +79,30 @@ except ImportError as e:
     st.error(f"❌ 导入 UI 模块失败: {str(e)[:200]}")
     st.stop()
 
+# 🔥 导入 Arena UI 模块（可选）
+try:
+    from ui_arena import render_arena_main, get_arena_mock_data
+    HAS_ARENA_UI = True
+except ImportError:
+    HAS_ARENA_UI = False
+
+# 🔥 导入 Arena 调度器模块（可选）
+try:
+    from arena_scheduler import (
+        start_scheduler, stop_scheduler, is_scheduler_running,
+        get_latest_battle_result, get_recent_decisions
+    )
+    HAS_ARENA_SCHEDULER = True
+except ImportError:
+    HAS_ARENA_SCHEDULER = False
+
+# 🔥 自动刷新组件（用于轮询 AI 决策）
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
+
 # ============ 辅助函数 ============
 
 def get_env_config(env_mode):
@@ -409,8 +433,26 @@ def main():
         "get_hedge_positions": get_hedge_positions_formatted  # 🔥 实时对冲仓
     }
     
-    # 调用UI模块
-    render_main(view_model, actions)
+    # 🔥 UI 模式切换：Arena 模式 vs 经典模式
+    # 切换按钮已移至侧边栏 (ui_legacy.py render_sidebar)
+    if HAS_ARENA_UI and st.session_state.get('arena_mode', False):
+        # Arena 模式
+        # 🔥 移除全局 st_autorefresh，改用 @st.fragment 局部刷新
+        # 这样 K 线图不会因为刷新而重置
+        
+        # 检查是否有新决策（不再依赖全局刷新）
+        if HAS_ARENA_SCHEDULER:
+            latest_result = get_latest_battle_result()
+            last_ts = st.session_state.get('last_decision_ts', 0)
+            
+            if latest_result and latest_result.timestamp > last_ts:
+                st.session_state.last_decision_ts = latest_result.timestamp
+                st.session_state.latest_battle_result = latest_result
+        
+        render_arena_main(view_model, actions)
+    else:
+        # 经典模式
+        render_main(view_model, actions)
 
 if __name__ == "__main__":
     main()

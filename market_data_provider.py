@@ -206,7 +206,7 @@ class MarketDataProvider:
             elif self.ohlcv_cache[key].bars_count < 200:
                 # K线数量严重不足，需要重新初始化
                 need_full_init = True
-                logger.warning(f"[md-reinit] {symbol} {timeframe} K线不足 ({self.ohlcv_cache[key].bars_count} < 200)，重新初始化")
+                logger.debug(f"[md-reinit] {symbol} {timeframe} K线不足，重新初始化")
             
             # ========== 全量分页拉取（首次初始化）==========
             if need_full_init:
@@ -237,9 +237,9 @@ class MarketDataProvider:
                         
                         # 🔥 如果数据不足目标数量，打印警告但不失败
                         if len(data) < limit:
-                            logger.warning(f"[md-init] {symbol} {timeframe} 数据不足目标 ({len(data)}/{limit} bars)，可能是新上线币种")
+                            logger.debug(f"[md-init] {symbol} {timeframe} 数据不足目标 ({len(data)}/{limit} bars)")
                         else:
-                            logger.info(f"[md-init] {symbol} {timeframe} 全量拉取完成 {len(data)} bars, max_ts={max_ts}")
+                            logger.debug(f"[md-init] {symbol} {timeframe} 全量拉取完成 {len(data)} bars")
                         
                         self.reset_circuit_breaker("ohlcv", symbol)
                         return data, False
@@ -255,7 +255,7 @@ class MarketDataProvider:
                             bars_count=len(data),
                             is_initialized=True  # 标记为已初始化，避免重复拉取
                         )
-                        logger.warning(f"[md-init] {symbol} {timeframe} K线数量过少 ({len(data)} bars)，策略可能无法正常工作")
+                        logger.debug(f"[md-init] {symbol} {timeframe} K线数量过少 ({len(data)} bars)")
                         return data, False
                     else:
                         raise Exception(f"全量拉取返回空数据: {symbol} {timeframe}")
@@ -336,14 +336,14 @@ class MarketDataProvider:
     
     def _fetch_full_history(self, symbol: str, timeframe: str, target_bars: int) -> list:
         """
-        🔥 分页循环拉取全量历史K线
+        🔥 分页循环拉取全量历史K线（倒序策略）
         
         OKX 单次只返回 100/300 根，需要多次请求拼接直到凑够目标数量
         
-        策略：使用 since 参数从过去某个时间点开始向后拉取
-        - 计算目标起始时间 = 当前时间 - (target_bars * tf_ms)
-        - 从起始时间开始，每次拉取 OHLCV_PAGE_SIZE 根
-        - 使用 since = 上一页最大时间戳 + 1 继续向后拉取
+        策略：从最新数据向过去拉取（倒序分页）
+        - 第一次不带 since，获取最新的 100 根
+        - 后续使用 since = 最小时间戳 - 1，向过去拉取
+        - 直到凑够目标数量或无更多数据
         
         参数:
         - symbol: 交易对
@@ -351,36 +351,46 @@ class MarketDataProvider:
         - target_bars: 目标K线数量
         
         返回:
-        - K线数据列表 [[ts, o, h, l, c, v], ...]
+        - K线数据列表 [[ts, o, h, l, c, v], ...]（按时间升序）
         """
         tf_ms = _get_timeframe_ms(timeframe)
         all_candles = []
         seen_timestamps = set()
         
-        # 计算目标起始时间（从过去开始向后拉取）
-        now_ms = int(time.time() * 1000)
-        # 多拉取一些，确保有足够数据
-        start_ts = now_ms - (target_bars + 100) * tf_ms
-        
         page_count = 0
-        current_since = start_ts
+        # 第一次不带 since，获取最新数据
+        current_end_ts = None
         
-        logger.info(f"[md-full] {symbol} {timeframe} 开始分页拉取，目标 {target_bars} bars")
+        logger.debug(f"[md-full] {symbol} {timeframe} 开始倒序分页拉取，目标 {target_bars} bars")
         
         while len(all_candles) < target_bars and page_count < OHLCV_MAX_PAGES:
             page_count += 1
             
             try:
-                # 使用 since 参数从指定时间开始向后拉取
-                data, _ = self._request_with_retry(
-                    "ohlcv", symbol,
-                    lambda: self.exchange.fetch_ohlcv(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        since=current_since,
-                        limit=OHLCV_PAGE_SIZE
+                # 构建请求参数
+                if current_end_ts is None:
+                    # 第一次请求：不带 since，获取最新数据
+                    data, _ = self._request_with_retry(
+                        "ohlcv", symbol,
+                        lambda: self.exchange.fetch_ohlcv(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            limit=OHLCV_PAGE_SIZE
+                        )
                     )
-                )
+                else:
+                    # 后续请求：使用 params.after 向过去拉取（OKX 特有参数）
+                    # OKX 的 after 参数表示获取该时间戳之前的数据
+                    end_ts = current_end_ts
+                    data, _ = self._request_with_retry(
+                        "ohlcv", symbol,
+                        lambda: self.exchange.fetch_ohlcv(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            limit=OHLCV_PAGE_SIZE,
+                            params={'after': str(end_ts)}
+                        )
+                    )
                 
                 if not data or len(data) == 0:
                     logger.debug(f"[md-full] {symbol} {timeframe} 第{page_count}页返回空数据，停止分页")
@@ -388,30 +398,25 @@ class MarketDataProvider:
                 
                 # 去重并添加
                 new_count = 0
-                max_ts_in_page = 0
+                min_ts_in_page = float('inf')
                 for candle in data:
                     ts = candle[0]
                     if ts not in seen_timestamps:
                         seen_timestamps.add(ts)
                         all_candles.append(candle)
                         new_count += 1
-                    if ts > max_ts_in_page:
-                        max_ts_in_page = ts
+                    if ts < min_ts_in_page:
+                        min_ts_in_page = ts
                 
                 logger.debug(f"[md-full] {symbol} {timeframe} 第{page_count}页: +{new_count} bars, 累计 {len(all_candles)}")
                 
                 if new_count == 0:
-                    # 没有新数据，可能已到达最新
+                    # 没有新数据，可能已到达历史最早
                     logger.debug(f"[md-full] {symbol} {timeframe} 无新数据，停止分页")
                     break
                 
-                # 检查是否已经拉取到最新数据
-                if max_ts_in_page >= now_ms - tf_ms:
-                    logger.debug(f"[md-full] {symbol} {timeframe} 已拉取到最新数据，停止分页")
-                    break
-                
-                # 更新 since 为本页最大时间戳 + 1ms，用于下一页请求
-                current_since = max_ts_in_page + 1
+                # 更新 end_ts 为本页最小时间戳，用于下一页请求
+                current_end_ts = min_ts_in_page
                 
                 # 短暂延迟，避免触发限流
                 time.sleep(0.1)
@@ -420,14 +425,14 @@ class MarketDataProvider:
                 logger.error(f"[md-full] {symbol} {timeframe} 第{page_count}页拉取失败: {e}")
                 break
         
-        # 按时间戳排序
+        # 按时间戳排序（升序）
         all_candles.sort(key=lambda x: x[0])
         
         # 保留最新的 target_bars 根
         if len(all_candles) > target_bars:
             all_candles = all_candles[-target_bars:]
         
-        logger.info(f"[md-full] {symbol} {timeframe} 分页拉取完成: {page_count} 页, {len(all_candles)} bars")
+        logger.debug(f"[md-full] {symbol} {timeframe} 分页拉取完成: {page_count} 页, {len(all_candles)} bars")
         
         return all_candles
     
@@ -1058,15 +1063,45 @@ def create_market_data_exchange(use_market_key: bool = True):
     """
     import ccxt
     
-    # 读取行情专用 Key
-    market_key = os.getenv("MARKET_DATA_API_KEY", "")
-    market_secret = os.getenv("MARKET_DATA_SECRET", "")
-    market_passphrase = os.getenv("MARKET_DATA_PASSPHRASE", "")
+    # 🔥 优先从数据库读取 Key（UI 配置的 Key）
+    market_key = ""
+    market_secret = ""
+    market_passphrase = ""
+    trade_key = ""
+    trade_secret = ""
+    trade_passphrase = ""
     
-    # 读取交易 Key（回退）
-    trade_key = os.getenv("OKX_API_KEY", "")
-    trade_secret = os.getenv("OKX_API_SECRET", "")
-    trade_passphrase = os.getenv("OKX_API_PASSPHRASE", "")
+    try:
+        from config_manager import get_config_manager
+        config_mgr = get_config_manager()
+        creds = config_mgr.load_credentials()  # 修正方法名
+        
+        # 从数据库读取行情专用 Key
+        if creds.has_market_key():
+            market_key = creds.market_api_key
+            market_secret = creds.market_api_secret
+            market_passphrase = creds.market_api_passphrase
+            logger.debug("[MarketData] 从配置文件加载行情 Key")
+        
+        # 从数据库读取交易 Key
+        if creds.has_trade_key():
+            trade_key = creds.trade_api_key
+            trade_secret = creds.trade_api_secret
+            trade_passphrase = creds.trade_api_passphrase
+            logger.debug("[MarketData] 从配置文件加载交易 Key")
+    except Exception as e:
+        logger.debug(f"[MarketData] 配置文件读取失败，回退到环境变量: {e}")
+    
+    # 回退到环境变量
+    if not market_key:
+        market_key = os.getenv("MARKET_DATA_API_KEY", "")
+        market_secret = os.getenv("MARKET_DATA_SECRET", "")
+        market_passphrase = os.getenv("MARKET_DATA_PASSPHRASE", "")
+    
+    if not trade_key:
+        trade_key = os.getenv("OKX_API_KEY", "")
+        trade_secret = os.getenv("OKX_API_SECRET", "")
+        trade_passphrase = os.getenv("OKX_API_PASSPHRASE", "")
     
     # 决定使用哪套 Key
     is_dedicated_key = False
@@ -1081,7 +1116,7 @@ def create_market_data_exchange(use_market_key: bool = True):
         api_secret = trade_secret
         api_passphrase = trade_passphrase
         if use_market_key:
-            logger.warning("[MarketData] 未配置独立行情 Key，回退使用交易 Key")
+            logger.debug("[MarketData] 未配置独立行情 Key，使用交易 Key")
         else:
             logger.info("[MarketData] 使用交易 Key")
     
