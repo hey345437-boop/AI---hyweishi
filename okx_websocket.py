@@ -67,12 +67,23 @@ class OKXWebSocketClient:
         self.ws: Optional[websocket.WebSocketApp] = None
         self.ws_thread: Optional[threading.Thread] = None
         
-        # 🔥 代理配置（从环境变量读取）
+        # 🔥 代理配置（复用 env_validator 的自动检测逻辑）
         import os
         self.http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
         self.https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        
+        # 🔥 如果没有配置代理，使用 env_validator 的自动检测
+        if not self.https_proxy and not self.http_proxy:
+            try:
+                from env_validator import EnvironmentValidator
+                proxy_config = EnvironmentValidator.detect_system_proxy()
+                self.https_proxy = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
+                self.http_proxy = proxy_config.get('http_proxy')
+            except Exception as e:
+                logger.debug(f"[WS] 代理自动检测失败: {e}")
+        
         if self.https_proxy:
-            logger.info(f"[WS] 检测到代理配置: {self.https_proxy}")
+            logger.info(f"[WS] 使用代理: {self.https_proxy}")
         
         # ========== 线程安全机制 ==========
         # [Fix #1] WebSocket 锁：保护 ws.send() / ws.close() 的并发访问
@@ -161,7 +172,7 @@ class OKXWebSocketClient:
         2. 安全关闭 WebSocket（吞掉异常）
         3. 等待工作线程结束
         """
-        logger.info("[WS] 正在停止...")
+        logger.debug("[WS] 正在停止...")
         self.stop_event.set()
         
         # 安全关闭 WebSocket
@@ -182,7 +193,7 @@ class OKXWebSocketClient:
             self.msg_queue.put(None)
             self.queue_worker_thread.join(timeout=5)
         
-        logger.info("[WS] 已停止")
+        logger.debug("[WS] 已停止")
     
     def _connection_loop(self):
         """
@@ -249,19 +260,19 @@ class OKXWebSocketClient:
                 self.base_reconnect_delay * (2 ** (self.reconnect_attempts - 1)),
                 self.max_reconnect_delay
             )
-            logger.info(f"[WS] 将在 {delay:.1f}s 后重连 (第 {self.reconnect_attempts} 次)")
+            logger.debug(f"[WS] 将在 {delay:.1f}s 后重连 (第 {self.reconnect_attempts} 次)")
             
             # 可中断的等待
             if self.stop_event.wait(timeout=delay):
                 break  # 收到停止信号，退出循环
         
-        logger.info("[WS] 连接循环已退出")
+        logger.debug("[WS] 连接循环已退出")
     
     def _on_open(self, ws):
         """连接建立回调"""
         self.connected = True
         self.reconnect_attempts = 0  # 重置重连计数
-        logger.info("[WS] 连接已建立")
+        logger.info("[WS] 连接已建立")  # 保留：连接成功是重要事件
         
         # 重新订阅之前的频道
         self._resubscribe_all()
@@ -291,7 +302,7 @@ class OKXWebSocketClient:
         - queue.Empty: 正常超时，继续循环
         - 处理异常: 记录日志，继续处理下一条消息（线程永不死亡）
         """
-        logger.info("[WS] 消息处理线程已启动")
+        logger.debug("[WS] 消息处理线程已启动")
         
         while not self.stop_event.is_set():
             try:
@@ -313,7 +324,7 @@ class OKXWebSocketClient:
                 logger.error(f"[WS] 消息处理异常（线程继续运行）: {e}", exc_info=True)
                 # 继续处理下一条消息，线程永不死亡
         
-        logger.info("[WS] 消息处理线程已退出")
+        logger.debug("[WS] 消息处理线程已退出")
     
     def _process_message(self, message: str):
         """
@@ -332,7 +343,7 @@ class OKXWebSocketClient:
             
             # 处理订阅确认
             if data.get("event") == "subscribe":
-                logger.info(f"[WS] ✅ 订阅确认: {data.get('arg', {})}")
+                logger.debug(f"[WS] ✅ 订阅确认: {data.get('arg', {})}")
                 return
             
             # 处理错误
@@ -357,19 +368,19 @@ class OKXWebSocketClient:
     def _on_close(self, ws, close_status_code, close_msg):
         """连接关闭回调"""
         self.connected = False
-        logger.info(f"[WS] 连接关闭: {close_status_code} - {close_msg}")
+        logger.debug(f"[WS] 连接关闭: {close_status_code} - {close_msg}")
     
     def _resubscribe_all(self):
         """重新订阅所有频道"""
         if not self.subscriptions:
-            logger.info("[WS] 无待重新订阅的频道")
+            logger.debug("[WS] 无待重新订阅的频道")
             return
         
-        logger.info(f"[WS] 开始重新订阅 {len(self.subscriptions)} 个频道")
+        logger.debug(f"[WS] 开始重新订阅 {len(self.subscriptions)} 个频道")
         for channel_key, sub_info in self.subscriptions.items():
             try:
                 self._send_subscribe(sub_info["channel"], sub_info["inst_id"], sub_info.get("extra_args", {}))
-                logger.info(f"[WS] 重新订阅: {channel_key}")
+                logger.debug(f"[WS] 重新订阅: {channel_key}")
             except Exception as e:
                 logger.error(f"[WS] 重新订阅失败 {channel_key}: {e}")
     
@@ -541,11 +552,11 @@ class OKXWebSocketClient:
                 "op": "subscribe",
                 "args": [{"channel": channel, "instId": inst_id}]
             })):
-                logger.info(f"[WS] 订阅 K线: {inst_id} {timeframe}")
+                logger.debug(f"[WS] 订阅 K线: {inst_id} {timeframe}")
                 return True
             return False
         else:
-            logger.warning(f"[WS] 未连接，订阅将在连接后自动执行: {inst_id} {timeframe}")
+            logger.debug(f"[WS] 未连接，订阅将在连接后自动执行: {inst_id} {timeframe}")
             return False
     
     def subscribe_ticker(self, symbol: str, callback: Callable = None) -> bool:
@@ -587,11 +598,11 @@ class OKXWebSocketClient:
                 "op": "subscribe",
                 "args": [{"channel": channel, "instId": inst_id}]
             })):
-                logger.info(f"[WS] 订阅行情: {inst_id}")
+                logger.debug(f"[WS] 订阅行情: {inst_id}")
                 return True
             return False
         else:
-            logger.warning(f"[WS] 未连接，订阅将在连接后自动执行: {inst_id}")
+            logger.debug(f"[WS] 未连接，订阅将在连接后自动执行: {inst_id}")
             return False
     
     def unsubscribe(self, symbol: str, channel_type: str = "candle", timeframe: str = "1m") -> bool:
@@ -633,10 +644,10 @@ class OKXWebSocketClient:
                 }]
             }
             if self._safe_send(json.dumps(msg)):
-                logger.info(f"[WS] 取消订阅: {channel_key}")
+                logger.debug(f"[WS] 取消订阅: {channel_key}")
                 return True
             else:
-                logger.error(f"[WS] 取消订阅失败")
+                logger.warning(f"[WS] 取消订阅失败")
                 return False
         
         return True
@@ -713,6 +724,91 @@ class OKXWebSocketClient:
             "ticker_cache": len(self.ticker_cache),
             "reconnect_attempts": self.reconnect_attempts
         }
+    
+    def warmup_cache(self, symbol: str, timeframe: str, ohlcv_data: List) -> int:
+        """
+        🔥 预热 K线缓存（混合模式核心方法）
+        
+        将 REST API 获取的历史 K线数据注入到 WebSocket 缓存中，
+        后续 WebSocket 推送的实时数据会自动更新/追加到缓存。
+        
+        Args:
+            symbol: 交易对，如 "BTC/USDT:USDT"
+            timeframe: 时间周期，如 "1m"
+            ohlcv_data: K线数据列表 [[ts, o, h, l, c, vol], ...]
+        
+        Returns:
+            注入的 K线数量
+        """
+        if not ohlcv_data:
+            return 0
+        
+        inst_id = self._convert_symbol(symbol)
+        tf_normalized = self._normalize_timeframe(timeframe)
+        cache_key = f"{inst_id}:{tf_normalized}"
+        
+        with self.candle_cache_lock:
+            # 如果缓存已存在，合并数据（去重）
+            if cache_key in self.candle_cache:
+                existing = self.candle_cache[cache_key]
+                existing_ts = {candle[0] for candle in existing}
+                
+                # 只添加不存在的 K线
+                new_candles = [c for c in ohlcv_data if c[0] not in existing_ts]
+                if new_candles:
+                    existing.extend(new_candles)
+                    # 按时间戳排序
+                    existing.sort(key=lambda x: x[0])
+                    # 限制缓存大小
+                    if len(existing) > 1000:
+                        self.candle_cache[cache_key] = existing[-1000:]
+                    
+                    logger.debug(f"[WS] 预热合并: {cache_key} +{len(new_candles)} bars, total={len(self.candle_cache[cache_key])}")
+                    return len(new_candles)
+                return 0
+            else:
+                # 缓存不存在，直接设置
+                # 确保数据格式正确：[[ts, o, h, l, c, vol], ...]
+                normalized_data = []
+                for candle in ohlcv_data:
+                    if len(candle) >= 6:
+                        normalized_data.append([
+                            int(candle[0]),    # ts
+                            float(candle[1]),  # open
+                            float(candle[2]),  # high
+                            float(candle[3]),  # low
+                            float(candle[4]),  # close
+                            float(candle[5])   # volume
+                        ])
+                
+                # 按时间戳排序
+                normalized_data.sort(key=lambda x: x[0])
+                
+                # 限制缓存大小
+                if len(normalized_data) > 1000:
+                    normalized_data = normalized_data[-1000:]
+                
+                self.candle_cache[cache_key] = normalized_data
+                logger.info(f"[WS] 预热完成: {cache_key} = {len(normalized_data)} bars")
+                return len(normalized_data)
+    
+    def get_cache_count(self, symbol: str, timeframe: str) -> int:
+        """
+        获取指定币种和周期的缓存 K线数量
+        
+        Args:
+            symbol: 交易对
+            timeframe: 时间周期
+        
+        Returns:
+            缓存的 K线数量
+        """
+        inst_id = self._convert_symbol(symbol)
+        tf_normalized = self._normalize_timeframe(timeframe)
+        cache_key = f"{inst_id}:{tf_normalized}"
+        
+        with self.candle_cache_lock:
+            return len(self.candle_cache.get(cache_key, []))
     
     def _normalize_timeframe(self, timeframe: str) -> str:
         """

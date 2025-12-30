@@ -881,6 +881,57 @@ def main():
             for tf in ['1m', '3m', '5m']:  # 订阅常用周期
                 ws_provider.subscribe(sym, tf)
         logger.info(f"[WS] 已订阅 {len(TRADE_SYMBOLS)} 个已验证币种的 K线数据")
+        
+        # 🔥🔥🔥 混合模式核心：用 REST API 预热 WebSocket 缓存 🔥🔥🔥
+        # WebSocket 只推送实时更新，不推送历史数据
+        # 必须先用 REST API 拉取历史数据注入缓存，否则策略无法计算技术指标
+        if provider is not None and ws_provider.ws_client is not None:
+            print(f"\n{'='*70}")
+            print(f"🔥 [WS混合模式] 开始预热 WebSocket 缓存...")
+            print(f"   币种: {len(TRADE_SYMBOLS)} | 周期: 1m, 3m, 5m")
+            print(f"{'='*70}")
+            
+            warmup_start = time.time()
+            warmup_success = 0
+            warmup_failed = 0
+            
+            for sym in TRADE_SYMBOLS:
+                for tf in ['1m', '3m', '5m']:
+                    try:
+                        # 用 REST API 拉取历史数据
+                        ohlcv_data, is_stale = provider.get_ohlcv(sym, timeframe=tf, limit=500)
+                        if ohlcv_data and len(ohlcv_data) > 0:
+                            # 注入到 WebSocket 缓存
+                            injected = ws_provider.ws_client.warmup_cache(sym, tf, ohlcv_data)
+                            if injected > 0:
+                                warmup_success += 1
+                                logger.debug(f"[WS预热] {sym} {tf}: {injected} bars")
+                            else:
+                                warmup_success += 1  # 已有数据也算成功
+                        else:
+                            warmup_failed += 1
+                            logger.warning(f"[WS预热] {sym} {tf}: REST 返回空数据")
+                    except Exception as e:
+                        warmup_failed += 1
+                        logger.warning(f"[WS预热] {sym} {tf} 失败: {e}")
+            
+            warmup_cost = time.time() - warmup_start
+            print(f"\n{'='*70}")
+            print(f"✅ [WS混合模式] 预热完成")
+            print(f"   成功: {warmup_success} | 失败: {warmup_failed} | 耗时: {warmup_cost:.2f}s")
+            print(f"{'='*70}\n")
+            logger.info(f"[WS预热] 完成 | 成功: {warmup_success} | 失败: {warmup_failed} | 耗时: {warmup_cost:.2f}s")
+        
+        # 🔥 立即更新 WebSocket 状态到数据库（供 UI 读取）
+        try:
+            ws_stats = ws_provider.ws_client.get_cache_stats() if ws_provider.ws_client else {}
+            update_ws_status(
+                connected=True,
+                subscriptions=ws_stats.get('subscriptions', 0),
+                candle_cache_count=len(ws_stats.get('candle_cache', {}))
+            )
+        except Exception:
+            pass
     
     # 初始化引擎状态
     update_engine_status(
@@ -1155,11 +1206,14 @@ def main():
                         free_margin = equity - used_margin
                     
                     # 🔥🔥🔥 核心风控计算并更新缓存 🔥🔥🔥
+                    # 从配置读取最大仓位比例（默认 10%）
+                    max_position_pct = float(_bot_config.get('max_position_pct', 0.10) or 0.10)
+                    
                     if equity == 0:
                         preflight_cache.update(False, 0.0, 0.0, "余额为0", total_notional=0.0, total_margin=0.0)
                         print(f"⚠️ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: $0 | 状态: 余额为0")
                     else:
-                        max_allowed_margin = equity * 0.10
+                        max_allowed_margin = equity * max_position_pct
                         remaining_margin = max_allowed_margin - used_margin
                         
                         if used_margin >= max_allowed_margin:
@@ -1168,13 +1222,13 @@ def main():
                                 f"已用保证金超限 ({used_margin:.2f}/{max_allowed_margin:.2f})",
                                 total_notional=total_notional, total_margin=used_margin
                             )
-                            print(f"🚨 [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 限额: ${max_allowed_margin:.2f} | 状态: ❌ 已超限")
+                            print(f"🚨 [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 限额: ${max_allowed_margin:.2f} ({max_position_pct*100:.0f}%) | 状态: ❌ 已超限")
                         else:
                             preflight_cache.update(
                                 True, remaining_margin, equity, "OK",
                                 total_notional=total_notional, total_margin=used_margin
                             )
-                            print(f"✅ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 剩余额度: ${remaining_margin:.2f} | 状态: 可开仓")
+                            print(f"✅ [{now.strftime('%H:%M:%S')}] 风控检查 | 权益: ${equity:.2f} | 已用保证金: ${used_margin:.2f} | 剩余额度: ${remaining_margin:.2f} ({max_position_pct*100:.0f}%) | 状态: 可开仓")
                     
                 except Exception as e:
                     logger.error(f"[balance-sync] 预检查异常: {e}")
@@ -1216,7 +1270,11 @@ def main():
     balance_syncer_thread.start()
     logger.info("[balance-sync] 后台余额同步线程已启动")
     
-    print(f"🕰️ 进入时间监听模式...（收线确认模式：每分钟00-02秒触发）\n")
+    # 根据数据源模式显示不同的提示
+    if data_source_mode == 'WebSocket' and ws_provider is not None:
+        print(f"🚀 进入 WebSocket 实时模式...（每 1 秒扫描一次）\n")
+    else:
+        print(f"🕰️ 进入 REST 轮询模式...（收线确认模式：每分钟00-02秒触发）\n")
     print(f"⚠️ 交易功能默认关闭，请在前端手动启用交易\n")
     
     # 主循环
@@ -1227,10 +1285,11 @@ def main():
     max_lev = trading_params.get('leverage', 20)
     main_position_pct = trading_params.get('main_position_pct', 0.03)
     sub_position_pct = trading_params.get('sub_position_pct', 0.01)
+    hedge_position_pct = trading_params.get('hedge_position_pct', 0.03)
     hard_tp_pct = trading_params.get('hard_tp_pct', 0.02)
     hedge_tp_pct = trading_params.get('hedge_tp_pct', 0.005)
     
-    logger.debug(f"交易参数: 杠杆={max_lev}x, 主仓={main_position_pct*100}%, 次仓={sub_position_pct*100}%, 硬止盈={hard_tp_pct*100}%, 对冲止盈={hedge_tp_pct*100}%")
+    logger.debug(f"交易参数: 杠杆={max_lev}x, 主仓={main_position_pct*100}%, 次仓={sub_position_pct*100}%, 对冲仓={hedge_position_pct*100}%, 硬止盈={hard_tp_pct*100}%, 对冲止盈={hedge_tp_pct*100}%")
     
     # P1修复: 初始化风控模块（日损失限制）
     risk_config = RiskControlConfig(
@@ -1358,6 +1417,10 @@ def main():
     # 🔥 记录上一次的交易启用状态（用于检测从禁用→启用的变化）
     _prev_enable_trading = _warmup_enable_trading
     
+    # 🔥 WebSocket 实时扫描间隔（秒）
+    WS_REALTIME_SCAN_INTERVAL = 1  # 每1秒扫描一次（真正的实时模式）
+    last_ws_scan_time = 0  # 上次 WebSocket 扫描时间
+    
     while True:
         # 🔥 极速监听系统时间
         now = datetime.now()
@@ -1365,14 +1428,31 @@ def main():
         # 🔥 风控检查已移至后台线程 (background_balance_syncer)
         # 在 30秒 和 55秒 自动执行，无需在主循环中处理
         
-        # 🔥 收线确认模式：每分钟00-02秒触发（整分扫描，防止错过）
-        # 在00秒拉取时，交易所的最新K线(-1)是刚开盘的那根，倒数第二根(-2)就是已收线的K线
-        if 0 <= now.second <= 2 and now.minute != last_trigger_minute:
-            last_trigger_minute = now.minute
+        # 🔥 判断扫描模式：WebSocket 实时模式 vs REST 整点扫描模式
+        # WebSocket 实时模式：每 1 秒扫描一次，直接从缓存字典读取（零延迟）
+        # REST 整点扫描模式：每分钟 00 秒扫描，使用已收盘K线
+        should_scan = False
+        scan_mode = "REST"  # 默认 REST 模式
+        
+        if data_source_mode == 'WebSocket' and ws_provider is not None and ws_provider.is_connected():
+            # 🔥 WebSocket 实时模式：每 1 秒扫描一次（真正的零延迟）
+            current_time = time.time()
+            if current_time - last_ws_scan_time >= WS_REALTIME_SCAN_INTERVAL:
+                should_scan = True
+                scan_mode = "WebSocket"
+                last_ws_scan_time = current_time
+        else:
+            # 🔥 REST 整点扫描模式：每分钟 00-02 秒触发
+            if 0 <= now.second <= 2 and now.minute != last_trigger_minute:
+                should_scan = True
+                scan_mode = "REST"
+                last_trigger_minute = now.minute
+        
+        if should_scan:
             cycle_id += 1  # 递增周期ID
             cycle_start_time = time.time()
             
-            # 总闸门控制逻辑
+            # 总闘门控制逻辑
             control = get_control_flags()
             bot_config = get_bot_config()
             enable_trading = bot_config.get('enable_trading', 0)
@@ -1477,7 +1557,12 @@ def main():
             _prev_enable_trading = enable_trading
             
             # 获取需要扫描的时间周期
-            due_timeframes = get_due_timeframes(now.minute, supported_timeframes)
+            if scan_mode == "WebSocket":
+                # 🔥 WebSocket 实时模式：只扫描 1m 周期（实时信号策略通常只关注最短周期）
+                due_timeframes = ['1m']
+            else:
+                # REST 整点扫描模式：根据当前分钟确定需要扫描的周期
+                due_timeframes = get_due_timeframes(now.minute, supported_timeframes)
             
             if not due_timeframes:
                 continue
@@ -1489,6 +1574,11 @@ def main():
             
             # 🔥 收集扫描数据，最后统一输出
             scan_time_str = now.strftime('%H:%M:%S')
+            # 🔥 添加扫描模式标识
+            if scan_mode == "WebSocket":
+                scan_time_str = f"{scan_time_str} [WS实时]"
+            else:
+                scan_time_str = f"{scan_time_str} [REST整点]"
             # 从预检查缓存获取风控状态（零延迟，不查询余额）
             preflight_status = preflight_cache.get_status()
             scan_risk_status = "可开新主仓" if preflight_status['can_open_new'] else "仅允许对冲仓"
@@ -1822,6 +1912,74 @@ def main():
                     run_mode = new_bot_config.get('run_mode', 'sim')
                     base_position_size = new_bot_config.get('base_position_size', 0.01)
                     enable_trading = new_bot_config.get('enable_trading', 0)
+                    
+                    # 🔥 关键修复：静默检查时也要处理数据源模式切换
+                    new_data_source_mode = new_bot_config.get('data_source_mode', 'REST')
+                    if new_data_source_mode != data_source_mode:
+                        logger.info(f"[config] 数据源模式变更: {data_source_mode} -> {new_data_source_mode}")
+                        
+                        if new_data_source_mode == 'WebSocket' and ws_provider is None and WS_AVAILABLE:
+                            # 启用 WebSocket
+                            try:
+                                ws_provider = WebSocketMarketDataProvider(
+                                    use_aws=False,
+                                    fallback_provider=provider
+                                )
+                                if ws_provider.start():
+                                    logger.info("[WS] WebSocket 数据源已启动（静默热加载）")
+                                    # 订阅当前交易池的币种
+                                    for sym in TRADE_SYMBOLS:
+                                        for tf in ['1m', '3m', '5m']:
+                                            ws_provider.subscribe(sym, tf)
+                                    logger.info(f"[WS] 已订阅 {len(TRADE_SYMBOLS)} 个币种的 K线数据")
+                                    
+                                    # 🔥🔥🔥 混合模式：预热 WebSocket 缓存 🔥🔥🔥
+                                    if provider is not None and ws_provider.ws_client is not None:
+                                        logger.info("[WS预热] 开始预热缓存...")
+                                        warmup_count = 0
+                                        for sym in TRADE_SYMBOLS:
+                                            for tf in ['1m', '3m', '5m']:
+                                                try:
+                                                    ohlcv_data, _ = provider.get_ohlcv(sym, timeframe=tf, limit=500)
+                                                    if ohlcv_data and len(ohlcv_data) > 0:
+                                                        ws_provider.ws_client.warmup_cache(sym, tf, ohlcv_data)
+                                                        warmup_count += 1
+                                                except Exception:
+                                                    pass
+                                        logger.info(f"[WS预热] 完成，预热 {warmup_count} 个缓存")
+                                    
+                                    # 更新 WebSocket 状态到数据库
+                                    try:
+                                        ws_stats = ws_provider.ws_client.get_cache_stats() if ws_provider.ws_client else {}
+                                        update_ws_status(
+                                            connected=True,
+                                            subscriptions=ws_stats.get('subscriptions', 0),
+                                            candle_cache_count=len(ws_stats.get('candle_cache', {}))
+                                        )
+                                    except Exception:
+                                        pass
+                                else:
+                                    ws_provider = None
+                            except Exception as e:
+                                logger.warning(f"[WS] WebSocket 启动失败: {e}")
+                                ws_provider = None
+                        elif new_data_source_mode == 'REST' and ws_provider is not None:
+                            # 禁用 WebSocket
+                            try:
+                                ws_provider.stop()
+                                ws_provider = None
+                                logger.info("[WS] WebSocket 数据源已停止（静默热加载）")
+                                # 更新 WebSocket 状态到数据库
+                                try:
+                                    update_ws_status(connected=False, subscriptions=0, candle_cache_count=0)
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                        
+                        # 🔥 更新 data_source_mode 变量
+                        data_source_mode = new_data_source_mode
+                    
                     last_config_updated_at = new_bot_config.get('updated_at', 0)
                     update_engine_status(run_mode=run_mode)
                 except Exception as e:
@@ -1862,6 +2020,9 @@ def main():
                         except Exception:
                             pass
                     
+                    # 🔥 关键修复：更新 data_source_mode 变量，确保数据获取逻辑使用正确的模式
+                    data_source_mode = new_data_source_mode
+                    
                     # 解析新的交易对
                     if symbols_str:
                         symbols = symbols_str.split(',')
@@ -1884,6 +2045,32 @@ def main():
                             for tf in ['1m', '3m', '5m']:
                                 ws_provider.subscribe(sym, tf)
                         logger.info(f"[WS] 已订阅 {len(TRADE_SYMBOLS)} 个已验证币种的 K线数据（热加载）")
+                        
+                        # 🔥🔥🔥 混合模式：预热 WebSocket 缓存 🔥🔥🔥
+                        if provider is not None and ws_provider.ws_client is not None:
+                            logger.info("[WS预热] 开始预热缓存（热加载）...")
+                            warmup_count = 0
+                            for sym in TRADE_SYMBOLS:
+                                for tf in ['1m', '3m', '5m']:
+                                    try:
+                                        ohlcv_data, _ = provider.get_ohlcv(sym, timeframe=tf, limit=500)
+                                        if ohlcv_data and len(ohlcv_data) > 0:
+                                            ws_provider.ws_client.warmup_cache(sym, tf, ohlcv_data)
+                                            warmup_count += 1
+                                    except Exception:
+                                        pass
+                            logger.info(f"[WS预热] 完成，预热 {warmup_count} 个缓存（热加载）")
+                        
+                        # 🔥 立即更新 WebSocket 状态到数据库（供 UI 读取）
+                        try:
+                            ws_stats = ws_provider.ws_client.get_cache_stats() if ws_provider.ws_client else {}
+                            update_ws_status(
+                                connected=True,
+                                subscriptions=ws_stats.get('subscriptions', 0),
+                                candle_cache_count=len(ws_stats.get('candle_cache', {}))
+                            )
+                        except Exception:
+                            pass
                     
                     last_config_updated_at = new_bot_config.get('updated_at', 0)
                     set_control_flags(reload_config=0)
@@ -1934,11 +2121,16 @@ def main():
             # 🔥 MTM 已在 balance_syncer（第30秒）执行，0秒扫描直接使用缓存的风控结果
             # 不再重复执行 MTM，避免权益数据不一致
             
-            # 🔥 收线确认模式：计算上一分钟的K线时间戳
-            # 例如：10:06:00 触发 -> 期望的已收线K线时间戳为 10:05:00.000
-            # 注意：在00秒触发时，我们要的是上一分钟已收盘的K线
+            # 🔥 K线时间戳处理：根据扫描模式确定期望的K线时间戳
             current_minute_ts = int(now.replace(second=0, microsecond=0).timestamp() * 1000)
-            expected_closed_candle_ts = current_minute_ts - 60 * 1000  # 上一分钟的K线
+            if scan_mode == "WebSocket":
+                # 🔥 WebSocket 实时模式：使用当前正在形成的K线
+                # 不需要检查 K 线是否滞后，因为实时模式使用的是未收盘K线
+                expected_closed_candle_ts = current_minute_ts  # 当前分钟的K线
+            else:
+                # 🔥 REST 整点扫描模式：使用上一分钟已收盘的K线
+                # 例如：10:06:00 触发 -> 期望的已收线K线时间戳为 10:05:00.000
+                expected_closed_candle_ts = current_minute_ts - 60 * 1000  # 上一分钟的K线
             
             # ============================================================
             # 🔥 并行数据准备：使用 ThreadPoolExecutor 并发拉取所有币种的K线
@@ -1955,192 +2147,236 @@ def main():
             ohlcv_lag_count = 0
             fetch_failed_list = []  # 记录拉取失败的币种
             
-            # 定义并行拉取任务（带重试）
-            def fetch_ohlcv_task(symbol: str, tf: str, retry_count: int = 0):
-                """并行拉取单个币种单个周期的K线数据"""
-                max_retries = 2
-                last_error = None
-                
-                for attempt in range(max_retries + 1):
-                    try:
-                        # 🔥 WebSocket 模式：优先使用 WebSocket 数据（低延迟）
-                        if ws_provider is not None and data_source_mode == 'WebSocket':
-                            ohlcv_data = ws_provider.get_ohlcv(symbol, timeframe=tf, limit=1000)
-                            if ohlcv_data and len(ohlcv_data) > 0:
-                                return symbol, tf, ohlcv_data, False, None
-                            else:
-                                # WebSocket 缓存为空，回退到 REST
-                                logger.debug(f"[WS] {symbol} {tf} 缓存为空，回退到 REST")
-                        
-                        # REST 数据源
-                        if provider is not None:
-                            # 🔥 优化：移除 force_fetch=True，让缓存机制正常工作
-                            # 扫描在每分钟00秒触发，此时新K线刚收盘
-                            # 缓存机制会自动检测是否有新K线并拉取增量数据
-                            # 这样可以减少不必要的API调用，保护限流配额
-                            ohlcv_data, is_stale = provider.get_ohlcv(
-                                symbol, timeframe=tf, limit=1000
-                            )
-                            return symbol, tf, ohlcv_data, is_stale, None
-                        else:
-                            # 模拟数据
-                            mock_data = [[expected_closed_candle_ts, 45000, 45100, 44900, 45050, 1000]]
-                            return symbol, tf, mock_data, False, None
-                    except Exception as e:
-                        last_error = str(e)
-                        if attempt < max_retries:
-                            time.sleep(0.2 * (attempt + 1))  # 指数退避
-                        continue
-                
-                return symbol, tf, None, False, last_error
-            
             # 构建任务列表：所有币种 × 所有到期周期
             current_symbols = list(TRADE_SYMBOLS.keys())
-            
-            # 🔥 优先处理待初始化的币种（上一轮失败的）
-            if provider is not None:
-                pending_symbols = provider.get_pending_init_symbols()
-                if pending_symbols:
-                    logger.info(f"[scan] 发现 {len(pending_symbols)} 个待初始化币种，优先处理")
             
             import pandas as pd
             
             # ============================================================
-            # 🔥 异步并发获取（推荐）vs 同步串行获取
+            # 🔥 WebSocket 实时模式：直接从缓存字典读取（零延迟）
             # ============================================================
-            use_async_fetcher = ASYNC_FETCHER_AVAILABLE and os.getenv("USE_ASYNC_FETCHER", "true").lower() == "true"
-            
-            if use_async_fetcher:
-                # 🔥 异步并发模式：真正的并发，耗时 < 1 秒
-                logger.debug("[scan] 使用异步并发获取模式")
+            if scan_mode == "WebSocket" and ws_provider is not None and ws_provider.ws_client is not None:
+                # 🔥 直接从 WebSocket 客户端的缓存字典读取，无需网络请求
+                ws_client = ws_provider.ws_client
                 
-                # 构建异步任务列表
-                async_tasks = [
-                    (symbol, tf, 50)  # (symbol, timeframe, limit)
-                    for symbol in current_symbols
-                    for tf in due_timeframes
-                ]
-                
-                # 获取 API 凭证
-                api_key = os.getenv("OKX_API_KEY", "")
-                api_secret = os.getenv("OKX_API_SECRET", "")
-                passphrase = os.getenv("OKX_API_PASSPHRASE", "")
-                sandbox = os.getenv("OKX_SANDBOX", "false").lower() == "true"
-                
-                # 执行异步批量获取
-                async_results = fetch_batch_ohlcv_sync(
-                    tasks=async_tasks,
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    passphrase=passphrase,
-                    sandbox=sandbox,
-                    market_type="swap",
-                    max_concurrent=20,
-                )
-                
-                # 处理异步结果
-                for (sym, tf), ohlcv_data in async_results.items():
-                    if ohlcv_data and len(ohlcv_data) > 0:
-                        # 计算该周期的期望K线时间戳
-                        tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
-                        expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
-                        latest_candle_ts = ohlcv_data[-1][0]
-                        is_lag = latest_candle_ts < expected_tf_ts
-                        is_stale = False
-                        
-                        if is_lag:
-                            ohlcv_lag_count += 1
-                        
-                        # 转换为 DataFrame
-                        df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                        
-                        # 存入预加载数据
-                        if sym not in preloaded_data:
-                            preloaded_data[sym] = {}
-                        preloaded_data[sym][tf] = df
-                        
-                        if sym not in ohlcv_data_dict:
-                            ohlcv_data_dict[sym] = {}
-                        ohlcv_data_dict[sym][tf] = ohlcv_data
-                        
-                        if sym not in ohlcv_stale_dict:
-                            ohlcv_stale_dict[sym] = {}
-                        ohlcv_stale_dict[sym][tf] = is_stale
-                        
-                        if sym not in ohlcv_lag_dict:
-                            ohlcv_lag_dict[sym] = {}
-                        ohlcv_lag_dict[sym][tf] = is_lag
-                        
-                        upsert_ohlcv(sym, tf, ohlcv_data)
-                        ohlcv_ok_count += 1
-                    else:
-                        fetch_failed_list.append((sym, tf))
-            
-            else:
-                # 🔥 同步串行模式（旧逻辑，作为回退）
-                logger.debug("[scan] 使用同步串行获取模式")
-                fetch_tasks = []
-                
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    for symbol in current_symbols:
-                        for tf in due_timeframes:
-                            fetch_tasks.append(executor.submit(fetch_ohlcv_task, symbol, tf))
-                    
-                    # 等待所有结果
-                    for future in as_completed(fetch_tasks):
+                for symbol in current_symbols:
+                    for tf in due_timeframes:
                         try:
-                            sym, tf, ohlcv_data, is_stale, error = future.result()
-                            
-                            if error:
-                                logger.warning(f"[scan] K线获取失败 {sym} {tf}: {error}")
-                                fetch_failed_list.append((sym, tf))
-                                continue
+                            # 🔥 直接从缓存读取 K 线数据
+                            ohlcv_data = ws_client.get_candles(symbol, tf, limit=1000)
                             
                             if ohlcv_data and len(ohlcv_data) > 0:
-                                # 计算该周期的期望K线时间戳
-                                tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
-                                expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
-                                latest_candle_ts = ohlcv_data[-1][0]
-                                is_lag = latest_candle_ts < expected_tf_ts
-                                
-                                if is_lag:
-                                    ohlcv_lag_count += 1
-                                    logger.debug(f"[scan-skip] reason=data_lag symbol={sym} tf={tf}")
-                                
+                                # 转换为 DataFrame
                                 df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                                 
-                                if sym not in preloaded_data:
-                                    preloaded_data[sym] = {}
-                                preloaded_data[sym][tf] = df
+                                # 存入预加载数据
+                                if symbol not in preloaded_data:
+                                    preloaded_data[symbol] = {}
+                                preloaded_data[symbol][tf] = df
                                 
-                                if sym not in ohlcv_data_dict:
-                                    ohlcv_data_dict[sym] = {}
-                                ohlcv_data_dict[sym][tf] = ohlcv_data
+                                if symbol not in ohlcv_data_dict:
+                                    ohlcv_data_dict[symbol] = {}
+                                ohlcv_data_dict[symbol][tf] = ohlcv_data
                                 
-                                if sym not in ohlcv_stale_dict:
-                                    ohlcv_stale_dict[sym] = {}
-                                ohlcv_stale_dict[sym][tf] = is_stale
+                                # 实时模式不检查滞后
+                                if symbol not in ohlcv_stale_dict:
+                                    ohlcv_stale_dict[symbol] = {}
+                                ohlcv_stale_dict[symbol][tf] = False
                                 
-                                if sym not in ohlcv_lag_dict:
-                                    ohlcv_lag_dict[sym] = {}
-                                ohlcv_lag_dict[sym][tf] = is_lag
+                                if symbol not in ohlcv_lag_dict:
+                                    ohlcv_lag_dict[symbol] = {}
+                                ohlcv_lag_dict[symbol][tf] = False
                                 
-                                upsert_ohlcv(sym, tf, ohlcv_data)
                                 ohlcv_ok_count += 1
-                                if is_stale:
-                                    ohlcv_stale_count += 1
                             else:
-                                fetch_failed_list.append((sym, tf))
+                                # 缓存为空，需要等待 WebSocket 推送数据
+                                fetch_failed_list.append((symbol, tf))
                         except Exception as e:
-                            logger.error(f"并行拉取结果处理失败: {e}")
+                            logger.debug(f"[WS] 读取缓存失败 {symbol} {tf}: {e}")
+                            fetch_failed_list.append((symbol, tf))
+                
+                fetch_cost = time.perf_counter() - fetch_start_time
+                
+                # 🔥 记录拉取失败的币种数量
+                fail_info = f" | 失败: {len(fetch_failed_list)}" if fetch_failed_list else ""
+                # 🔥 实时模式：只在有信号时打印日志，避免刷屏
+                if ohlcv_ok_count > 0:
+                    logger.debug(f"[scan] [WS实时] 缓存读取完成 | 耗时: {fetch_cost*1000:.1f}ms | 成功: {ohlcv_ok_count}/{len(current_symbols) * len(due_timeframes)}{fail_info}")
             
-            fetch_cost = time.perf_counter() - fetch_start_time
-            
-            # 🔥 记录拉取失败的币种数量
-            fail_info = f" | 失败: {len(fetch_failed_list)}" if fetch_failed_list else ""
-            logger.info(f"[scan] 并行拉取完成 | 耗时: {fetch_cost:.2f}s | 触发时间: {now.strftime('%H:%M:%S')} | 成功: {ohlcv_ok_count}/{len(current_symbols) * len(due_timeframes)}{fail_info}")
+            else:
+                # ============================================================
+                # 🔥 REST 整点扫描模式：使用原有的并行拉取逻辑
+                # ============================================================
+                
+                # 定义并行拉取任务（带重试）
+                def fetch_ohlcv_task(symbol: str, tf: str, retry_count: int = 0):
+                    """并行拉取单个币种单个周期的K线数据"""
+                    max_retries = 2
+                    last_error = None
+                    
+                    for attempt in range(max_retries + 1):
+                        try:
+                            # REST 数据源
+                            if provider is not None:
+                                ohlcv_data, is_stale = provider.get_ohlcv(
+                                    symbol, timeframe=tf, limit=1000
+                                )
+                                return symbol, tf, ohlcv_data, is_stale, None
+                            else:
+                                # 模拟数据
+                                mock_data = [[expected_closed_candle_ts, 45000, 45100, 44900, 45050, 1000]]
+                                return symbol, tf, mock_data, False, None
+                        except Exception as e:
+                            last_error = str(e)
+                            if attempt < max_retries:
+                                time.sleep(0.2 * (attempt + 1))  # 指数退避
+                            continue
+                    
+                    return symbol, tf, None, False, last_error
+                
+                # 🔥 优先处理待初始化的币种（上一轮失败的）
+                if provider is not None:
+                    pending_symbols = provider.get_pending_init_symbols()
+                    if pending_symbols:
+                        logger.info(f"[scan] 发现 {len(pending_symbols)} 个待初始化币种，优先处理")
+                
+                # ============================================================
+                # 🔥 异步并发获取（推荐）vs 同步串行获取
+                # ============================================================
+                use_async_fetcher = ASYNC_FETCHER_AVAILABLE and os.getenv("USE_ASYNC_FETCHER", "true").lower() == "true"
+                
+                if use_async_fetcher:
+                    # 🔥 异步并发模式：真正的并发，耗时 < 1 秒
+                    logger.debug("[scan] 使用异步并发获取模式")
+                    
+                    # 构建异步任务列表
+                    async_tasks = [
+                        (symbol, tf, 50)  # (symbol, timeframe, limit)
+                        for symbol in current_symbols
+                        for tf in due_timeframes
+                    ]
+                    
+                    # 获取 API 凭证
+                    api_key = os.getenv("OKX_API_KEY", "")
+                    api_secret = os.getenv("OKX_API_SECRET", "")
+                    passphrase = os.getenv("OKX_API_PASSPHRASE", "")
+                    sandbox = os.getenv("OKX_SANDBOX", "false").lower() == "true"
+                    
+                    # 执行异步批量获取
+                    async_results = fetch_batch_ohlcv_sync(
+                        tasks=async_tasks,
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        passphrase=passphrase,
+                        sandbox=sandbox,
+                        market_type="swap",
+                        max_concurrent=20,
+                    )
+                    
+                    # 处理异步结果
+                    for (sym, tf), ohlcv_data in async_results.items():
+                        if ohlcv_data and len(ohlcv_data) > 0:
+                            # 计算该周期的期望K线时间戳
+                            tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
+                            expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
+                            latest_candle_ts = ohlcv_data[-1][0]
+                            is_lag = latest_candle_ts < expected_tf_ts
+                            is_stale = False
+                            
+                            if is_lag:
+                                ohlcv_lag_count += 1
+                            
+                            # 转换为 DataFrame
+                            df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                            
+                            # 存入预加载数据
+                            if sym not in preloaded_data:
+                                preloaded_data[sym] = {}
+                            preloaded_data[sym][tf] = df
+                            
+                            if sym not in ohlcv_data_dict:
+                                ohlcv_data_dict[sym] = {}
+                            ohlcv_data_dict[sym][tf] = ohlcv_data
+                            
+                            if sym not in ohlcv_stale_dict:
+                                ohlcv_stale_dict[sym] = {}
+                            ohlcv_stale_dict[sym][tf] = is_stale
+                            
+                            if sym not in ohlcv_lag_dict:
+                                ohlcv_lag_dict[sym] = {}
+                            ohlcv_lag_dict[sym][tf] = is_lag
+                            
+                            upsert_ohlcv(sym, tf, ohlcv_data)
+                            ohlcv_ok_count += 1
+                        else:
+                            fetch_failed_list.append((sym, tf))
+                
+                else:
+                    # 🔥 同步串行模式（旧逻辑，作为回退）
+                    logger.debug("[scan] 使用同步串行获取模式")
+                    fetch_tasks = []
+                    
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        for symbol in current_symbols:
+                            for tf in due_timeframes:
+                                fetch_tasks.append(executor.submit(fetch_ohlcv_task, symbol, tf))
+                        
+                        # 等待所有结果
+                        for future in as_completed(fetch_tasks):
+                            try:
+                                sym, tf, ohlcv_data, is_stale, error = future.result()
+                                
+                                if error:
+                                    logger.warning(f"[scan] K线获取失败 {sym} {tf}: {error}")
+                                    fetch_failed_list.append((sym, tf))
+                                    continue
+                                
+                                if ohlcv_data and len(ohlcv_data) > 0:
+                                    # 计算该周期的期望K线时间戳
+                                    tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
+                                    expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
+                                    latest_candle_ts = ohlcv_data[-1][0]
+                                    is_lag = latest_candle_ts < expected_tf_ts
+                                    
+                                    if is_lag:
+                                        ohlcv_lag_count += 1
+                                        logger.debug(f"[scan-skip] reason=data_lag symbol={sym} tf={tf}")
+                                    
+                                    df = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                                    
+                                    if sym not in preloaded_data:
+                                        preloaded_data[sym] = {}
+                                    preloaded_data[sym][tf] = df
+                                    
+                                    if sym not in ohlcv_data_dict:
+                                        ohlcv_data_dict[sym] = {}
+                                    ohlcv_data_dict[sym][tf] = ohlcv_data
+                                    
+                                    if sym not in ohlcv_stale_dict:
+                                        ohlcv_stale_dict[sym] = {}
+                                    ohlcv_stale_dict[sym][tf] = is_stale
+                                    
+                                    if sym not in ohlcv_lag_dict:
+                                        ohlcv_lag_dict[sym] = {}
+                                    ohlcv_lag_dict[sym][tf] = is_lag
+                                    
+                                    upsert_ohlcv(sym, tf, ohlcv_data)
+                                    ohlcv_ok_count += 1
+                                    if is_stale:
+                                        ohlcv_stale_count += 1
+                                else:
+                                    fetch_failed_list.append((sym, tf))
+                            except Exception as e:
+                                logger.error(f"并行拉取结果处理失败: {e}")
+                
+                fetch_cost = time.perf_counter() - fetch_start_time
+                
+                # 🔥 记录拉取失败的币种数量
+                fail_info = f" | 失败: {len(fetch_failed_list)}" if fetch_failed_list else ""
+                logger.info(f"[scan] [REST整点] 并行拉取完成 | 耗时: {fetch_cost:.2f}s | 触发时间: {now.strftime('%H:%M:%S')} | 成功: {ohlcv_ok_count}/{len(current_symbols) * len(due_timeframes)}{fail_info}")
             
             # 数据获取耗时（将在 render_scan_block 中统一输出）
             
@@ -2219,6 +2455,7 @@ def main():
                     hedge_manager.update_params(hedge_tp_pct=hedge_tp_pct)
                 main_position_pct = _trading_params.get('main_position_pct', 0.03)
                 sub_position_pct = _trading_params.get('sub_position_pct', 0.01)
+                hedge_position_pct = _trading_params.get('hedge_position_pct', 0.03)
                 
                 # 🔥 步骤1：止盈检查（在信号处理之前）
                 for symbol, ticker in tickers.items():
@@ -2506,7 +2743,17 @@ def main():
                     })
                     
                     # 🔥 检查顺势解对冲
-                    main_pos = get_paper_position(symbol, 'long' if action == 'LONG' else 'short')
+                    # 🔥 修复：获取实际存在的主仓（不管方向），而不是根据信号方向获取
+                    main_pos_long = get_paper_position(symbol, 'long')
+                    main_pos_short = get_paper_position(symbol, 'short')
+                    # 选择有持仓的那个作为主仓
+                    if main_pos_long and float(main_pos_long.get('qty', 0) or 0) > 0:
+                        main_pos = main_pos_long
+                    elif main_pos_short and float(main_pos_short.get('qty', 0) or 0) > 0:
+                        main_pos = main_pos_short
+                    else:
+                        main_pos = None
+                    
                     hedge_list = get_hedge_positions(symbol)
                     signal_action = action
                     
@@ -2542,11 +2789,35 @@ def main():
                             })
                             continue
                     
+                    # 🔥 判断信号类型：开仓信号 vs 平仓信号
+                    # LONG/SHORT = 开仓信号
+                    # CLOSE_LONG/CLOSE_SHORT = 平仓信号（不开新仓）
+                    signal_upper = signal_action.upper()
+                    
+                    # 🔥 平仓信号处理：CLOSE_LONG/CLOSE_SHORT 只平仓，不开新仓
+                    if signal_upper in ('CLOSE_LONG', 'CLOSE_SHORT'):
+                        # CLOSE_LONG = 平多仓，CLOSE_SHORT = 平空仓
+                        close_side = 'long' if signal_upper == 'CLOSE_LONG' else 'short'
+                        
+                        # 检查是否有对应方向的主仓需要平
+                        if main_pos and main_pos.get('pos_side', '').lower() == close_side:
+                            # 有对应方向的主仓，执行平仓（这里只记录信号，实际平仓由止盈逻辑处理）
+                            logger.info(f"[CLOSE] {symbol} 收到平仓信号 {signal_upper}，主仓方向 {close_side}")
+                            # TODO: 可以在这里添加平仓逻辑
+                        else:
+                            logger.debug(f"[skip] {symbol} 收到 {signal_upper} 但无对应方向主仓，跳过")
+                        continue  # 平仓信号不开新仓
+                    
+                    # 🔥 只处理开仓信号：LONG/SHORT
+                    if signal_upper not in ('LONG', 'SHORT'):
+                        logger.debug(f"[skip] {symbol} 未知信号类型 {signal_action}，跳过")
+                        continue
+                    
                     # 🔥 判断是否为对冲单
                     is_hedge_order = False
                     if main_pos:
                         main_side = main_pos.get('pos_side', 'long').upper()
-                        if signal_action.upper() == main_side:
+                        if signal_upper == main_side:
                             # 🔥 已有同方向主仓，跳过（不加仓）
                             logger.debug(f"[skip] {symbol} 已有同方向主仓 {main_side}，跳过")
                             continue
@@ -2558,7 +2829,8 @@ def main():
                             is_hedge_order = True
                     
                     # 🔥 构建计划订单
-                    position_pct = sub_position_pct if is_hedge_order else main_position_pct
+                    # 对冲单使用 hedge_position_pct，主仓单使用 main_position_pct
+                    position_pct = hedge_position_pct if is_hedge_order else main_position_pct
                     # 使用预检查缓存的权益（零延迟）
                     _cached_equity = preflight_status['equity']
                     
@@ -2581,10 +2853,10 @@ def main():
                     
                     plan_order = {
                         "symbol": symbol,
-                        "side": "buy" if signal_action == "LONG" else "sell",
+                        "side": "buy" if signal_upper == "LONG" else "sell",
                         "amount": position_value / curr_price,  # 🔥 修复：使用仓位价值计算币数量
                         "order_type": "market",
-                        "posSide": "long" if signal_action == "LONG" else "short",
+                        "posSide": "long" if signal_upper == "LONG" else "short",
                         "tdMode": OKX_TD_MODE,
                         "leverage": max_lev,
                         "candle_time": candle_time,
@@ -2969,26 +3241,32 @@ def main():
                     logger.info("[scan] 首次扫描完成，后续扫描将正常执行交易")
                 
                 # 🔥 统一输出扫描块状摘要
-                render_scan_block(
-                    time_str=scan_time_str,
-                    timeframes=due_timeframes,
-                    symbols_count=len(TRADE_SYMBOLS),
-                    price_ok=scan_price_ok,
-                    risk_status=scan_risk_status,
-                    equity=preflight_status['equity'],
-                    remaining_base=preflight_status['remaining_base'],
-                    total_base_used=preflight_status.get('total_base_used', 0.0),
-                    total_margin=preflight_status.get('total_margin', 0.0),  # 🔥 传递已用保证金
-                    signals=scan_collected_signals,
-                    orders=scan_collected_orders,
-                    elapsed_sec=cycle_elapsed,
-                    logger=logger,
-                    debug_timing={
-                        'price_fetch': price_fetch_time,
-                        'data_fetch': fetch_cost,
-                        'signal_calc': signal_calc_cost
-                    }
-                )
+                # WebSocket 实时模式：只在有信号时输出，避免每秒刷屏
+                should_render_scan_block = True
+                if scan_mode == "WebSocket" and len(scan_collected_signals) == 0:
+                    should_render_scan_block = False  # 无信号时不输出
+                
+                if should_render_scan_block:
+                    render_scan_block(
+                        time_str=scan_time_str,
+                        timeframes=due_timeframes,
+                        symbols_count=len(TRADE_SYMBOLS),
+                        price_ok=scan_price_ok,
+                        risk_status=scan_risk_status,
+                        equity=preflight_status['equity'],
+                        remaining_base=preflight_status['remaining_base'],
+                        total_base_used=preflight_status.get('total_base_used', 0.0),
+                        total_margin=preflight_status.get('total_margin', 0.0),  # 🔥 传递已用保证金
+                        signals=scan_collected_signals,
+                        orders=scan_collected_orders,
+                        elapsed_sec=cycle_elapsed,
+                        logger=logger,
+                        debug_timing={
+                            'price_fetch': price_fetch_time,
+                            'data_fetch': fetch_cost,
+                            'signal_calc': signal_calc_cost
+                        }
+                    )
                 
             except Exception as e:
                 cycle_error_count += 1

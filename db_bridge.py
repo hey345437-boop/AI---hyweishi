@@ -717,8 +717,11 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                 'leverage': "INTEGER DEFAULT 20",
                 'main_position_pct': "REAL DEFAULT 0.03",
                 'sub_position_pct': "REAL DEFAULT 0.01",
+                'hedge_position_pct': "REAL DEFAULT 0.03",
                 'hard_tp_pct': "REAL DEFAULT 0.02",
                 'hedge_tp_pct': "REAL DEFAULT 0.005",
+                # 🔥 最大仓位比例（风控）
+                'max_position_pct': "REAL DEFAULT 0.10",
                 # 🔥 双通道信号执行模式
                 'execution_mode': "TEXT DEFAULT 'intrabar'",
                 # 🔥 数据源模式: REST 或 WebSocket
@@ -1037,9 +1040,13 @@ def update_bot_config(db_config: Optional[Dict[str, Any]] = None, **fields) -> N
         'updated_at', 'version',
         # 🔥 新增：交易参数配置
         'leverage', 'main_position_pct', 'sub_position_pct', 
-        'hard_tp_pct', 'hedge_tp_pct',
+        'hedge_position_pct', 'hard_tp_pct', 'hedge_tp_pct',
+        # 🔥 最大仓位比例（风控）
+        'max_position_pct',
         # 🔥 双通道信号执行模式
-        'execution_mode'
+        'execution_mode',
+        # 🔥 数据源模式（REST/WebSocket）
+        'data_source_mode'
     }
     
     # 过滤掉不在白名单中的字段
@@ -2503,3 +2510,200 @@ def clear_trade_history(db_config: Optional[Dict[str, Any]] = None) -> int:
         return deleted_count
     finally:
         conn.close()
+
+
+# ============ 即时平仓函数 ============
+
+def execute_immediate_flatten(
+    run_mode: str = 'paper',
+    exchange_adapter = None,
+    leverage: int = 20,
+    db_config: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    🔥 即时平仓 - 立即执行，不等待扫描周期
+    
+    同时支持测试模式和实盘模式：
+    - 测试模式：直接操作数据库，清除所有持仓并更新余额
+    - 实盘模式：调用交易所 API 平仓，然后清除数据库记录
+    
+    Args:
+        run_mode: 运行模式 ('paper' 或 'live')
+        exchange_adapter: 交易所适配器（实盘模式必需）
+        leverage: 杠杆倍数
+        db_config: 数据库配置
+    
+    Returns:
+        dict: {
+            'success': bool,
+            'closed_positions': list,  # 平仓的持仓列表
+            'total_pnl': float,         # 总盈亏
+            'new_equity': float,        # 平仓后的权益
+            'errors': list              # 错误列表
+        }
+    """
+    result = {
+        'success': True,
+        'closed_positions': [],
+        'total_pnl': 0.0,
+        'new_equity': 0.0,
+        'errors': []
+    }
+    
+    try:
+        # 1. 获取所有持仓
+        paper_positions = get_paper_positions(db_config)
+        hedge_positions = get_hedge_positions(db_config=db_config)
+        
+        if not paper_positions and not hedge_positions:
+            logger.info("[即时平仓] 无持仓需要平仓")
+            paper_bal = get_paper_balance(db_config)
+            result['new_equity'] = float(paper_bal.get('equity', 200) or 200)
+            return result
+        
+        # 2. 获取平仓前的权益
+        paper_bal = get_paper_balance(db_config)
+        pre_equity = float(paper_bal.get('equity', 200) or 200)
+        wallet_balance = float(paper_bal.get('wallet_balance', 200) or 200)
+        
+        logger.info(f"[即时平仓] 开始 | 模式: {run_mode} | 主仓: {len(paper_positions)} | 对冲: {len(hedge_positions)}")
+        
+        # 3. 实盘模式：先调用交易所 API 平仓
+        if run_mode == 'live' and exchange_adapter is not None:
+            try:
+                from close_position import close_all_positions
+                api_result = close_all_positions(exchange_adapter)
+                if not api_result.success:
+                    result['errors'].extend(api_result.errors)
+                    logger.warning(f"[即时平仓] 交易所 API 平仓部分失败: {api_result.errors}")
+            except Exception as e:
+                error_msg = f"交易所 API 平仓失败: {str(e)}"
+                result['errors'].append(error_msg)
+                logger.error(f"[即时平仓] {error_msg}")
+                # 继续清理数据库记录
+        
+        # 4. 计算盈亏并清理数据库
+        total_pnl = 0.0
+        current_ts = int(time.time() * 1000)
+        
+        # 4.1 处理主仓
+        for pos_key, pos in paper_positions.items():
+            symbol = pos.get('symbol', '')
+            pos_side = pos.get('pos_side', 'long')
+            qty = float(pos.get('qty', 0) or 0)
+            entry_price = float(pos.get('entry_price', 0) or 0)
+            unrealized_pnl = float(pos.get('unrealized_pnl', 0) or 0)
+            created_at = pos.get('created_at', 0)
+            
+            if qty <= 0:
+                continue
+            
+            # 使用已计算的未实现盈亏
+            pnl = unrealized_pnl
+            total_pnl += pnl
+            
+            # 记录平仓信息
+            result['closed_positions'].append({
+                'symbol': symbol,
+                'pos_side': pos_side,
+                'qty': qty,
+                'entry_price': entry_price,
+                'pnl': pnl,
+                'type': 'main'
+            })
+            
+            # 记录交易历史
+            try:
+                hold_time = (current_ts - created_at) // 1000 if created_at > 0 else 0
+                insert_trade_history(
+                    symbol=symbol,
+                    pos_side=pos_side,
+                    entry_price=entry_price,
+                    exit_price=entry_price,  # 使用入场价作为出场价（因为没有实时价格）
+                    qty=qty,
+                    pnl=pnl,
+                    hold_time=hold_time,
+                    note='即时平仓',
+                    db_config=db_config
+                )
+            except Exception as e:
+                logger.warning(f"[即时平仓] 记录交易历史失败: {e}")
+            
+            # 删除持仓记录
+            delete_paper_position(symbol, pos_side, db_config)
+            logger.info(f"[即时平仓] 已平主仓 {symbol} {pos_side} | PnL: ${pnl:.2f}")
+        
+        # 4.2 处理对冲仓
+        for hedge_pos in hedge_positions:
+            hedge_id = hedge_pos.get('id')
+            symbol = hedge_pos.get('symbol', '')
+            pos_side = hedge_pos.get('pos_side', 'long')
+            qty = float(hedge_pos.get('qty', 0) or 0)
+            entry_price = float(hedge_pos.get('entry_price', 0) or 0)
+            unrealized_pnl = float(hedge_pos.get('unrealized_pnl', 0) or 0)
+            created_at = hedge_pos.get('created_at', 0)
+            
+            if qty <= 0:
+                continue
+            
+            pnl = unrealized_pnl
+            total_pnl += pnl
+            
+            result['closed_positions'].append({
+                'symbol': symbol,
+                'pos_side': pos_side,
+                'qty': qty,
+                'entry_price': entry_price,
+                'pnl': pnl,
+                'type': 'hedge'
+            })
+            
+            # 记录交易历史
+            try:
+                hold_time = (current_ts - created_at) // 1000 if created_at > 0 else 0
+                insert_trade_history(
+                    symbol=symbol,
+                    pos_side=pos_side,
+                    entry_price=entry_price,
+                    exit_price=entry_price,
+                    qty=qty,
+                    pnl=pnl,
+                    hold_time=hold_time,
+                    note='即时平仓(对冲)',
+                    db_config=db_config
+                )
+            except Exception as e:
+                logger.warning(f"[即时平仓] 记录交易历史失败: {e}")
+            
+            # 删除对冲仓记录
+            if hedge_id:
+                delete_hedge_position(hedge_id, db_config)
+            logger.info(f"[即时平仓] 已平对冲仓 {symbol} {pos_side} | PnL: ${pnl:.2f}")
+        
+        # 5. 更新账户余额
+        # 平仓后：wallet_balance += total_pnl, equity = wallet_balance, available = wallet_balance
+        new_wallet = wallet_balance + total_pnl
+        new_equity = new_wallet
+        new_available = new_wallet
+        
+        update_paper_balance(
+            wallet_balance=new_wallet,
+            unrealized_pnl=0.0,
+            used_margin=0.0,
+            equity=new_equity,
+            available=new_available,
+            db_config=db_config
+        )
+        
+        result['total_pnl'] = total_pnl
+        result['new_equity'] = new_equity
+        
+        logger.info(f"[即时平仓] 完成 | 平仓数: {len(result['closed_positions'])} | 总PnL: ${total_pnl:.2f} | 新权益: ${new_equity:.2f}")
+        
+    except Exception as e:
+        error_msg = f"即时平仓异常: {str(e)}"
+        result['success'] = False
+        result['errors'].append(error_msg)
+        logger.error(f"[即时平仓] {error_msg}")
+    
+    return result

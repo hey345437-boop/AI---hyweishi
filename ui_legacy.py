@@ -1515,14 +1515,13 @@ def render_sidebar(view_model, actions):
         current_leverage = bot_config.get('leverage', 20)
         current_main_pct = bot_config.get('main_position_pct', 0.03)
         current_sub_pct = bot_config.get('sub_position_pct', 0.01)
+        current_hedge_pct = bot_config.get('hedge_position_pct', 0.03)
         current_hard_tp = bot_config.get('hard_tp_pct', 0.02)
         current_hedge_tp = bot_config.get('hedge_tp_pct', 0.005)
+        current_max_pos_pct = bot_config.get('max_position_pct', 0.10)
         
         with st.expander("交易参数设置", expanded=False):
             st.caption("💡 调整杠杆、仓位比例和止盈参数")
-            
-            # 🔥 执行模式固定为 59 秒抢跑（不再提供 UI 选择，不显示）
-            new_exec_mode = 'intrabar'  # 固定值
             
             st.markdown("##### 杠杆与仓位")
             
@@ -1537,8 +1536,18 @@ def render_sidebar(view_model, actions):
                 help="默认20倍杠杆"
             )
             
-            # 仓位比例设置
-            col_pos1, col_pos2 = st.columns(2)
+            # 🔥 最大仓位比例（风控）
+            new_max_pos_pct = st.number_input(
+                "最大仓位比例(%)",
+                min_value=1.0,
+                max_value=100.0,
+                value=current_max_pos_pct * 100,
+                step=1.0,
+                help="风控限制：已用保证金不能超过权益的此比例，默认10%"
+            ) / 100
+            
+            # 仓位比例设置（三列：主仓、次仓、对冲仓）
+            col_pos1, col_pos2, col_pos3 = st.columns(3)
             with col_pos1:
                 new_main_pct = st.number_input(
                     "主信号仓(%)",
@@ -1546,7 +1555,7 @@ def render_sidebar(view_model, actions):
                     max_value=20.0,
                     value=current_main_pct * 100,
                     step=0.5,
-                    help="主趋势信号的仓位比例(占权益百分比)"
+                    help="主周期信号的仓位比例"
                 ) / 100
             with col_pos2:
                 new_sub_pct = st.number_input(
@@ -1555,7 +1564,16 @@ def render_sidebar(view_model, actions):
                     max_value=10.0,
                     value=current_sub_pct * 100,
                     step=0.5,
-                    help="次信号/对冲信号的仓位比例"
+                    help="次周期信号的仓位比例"
+                ) / 100
+            with col_pos3:
+                new_hedge_pct = st.number_input(
+                    "对冲仓(%)",
+                    min_value=0.1,
+                    max_value=20.0,
+                    value=current_hedge_pct * 100,
+                    step=0.5,
+                    help="反向对冲信号的仓位比例"
                 ) / 100
             
             # 止盈设置
@@ -1587,9 +1605,10 @@ def render_sidebar(view_model, actions):
                         leverage=new_leverage,
                         main_position_pct=new_main_pct,
                         sub_position_pct=new_sub_pct,
+                        hedge_position_pct=new_hedge_pct,
                         hard_tp_pct=new_hard_tp,
                         hedge_tp_pct=new_hedge_tp,
-                        execution_mode=new_exec_mode  # 🔥 保存执行模式
+                        max_position_pct=new_max_pos_pct
                     )
                     actions.get("set_control_flags", lambda **kwargs: None)(reload_config=1)
                     st.success("交易参数已保存")
@@ -1597,8 +1616,7 @@ def render_sidebar(view_model, actions):
                     st.error(f"保存失败: {str(e)[:50]}")
             
             # 显示当前参数摘要
-            exec_mode_short = {"intrabar": "抢跑", "confirmed": "收线", "both": "双通道"}.get(new_exec_mode, new_exec_mode)
-            st.caption(f"当前: {exec_mode_short} | {new_leverage}x杠杆 | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}%")
+            st.caption(f"当前: {new_leverage}x杠杆 | 最大仓位{new_max_pos_pct*100:.0f}% | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}% | 对冲{new_hedge_pct*100:.1f}%")
         
         # ============ 🔥 数据源模式选择器 ============
         st.markdown("""
@@ -1613,9 +1631,14 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # 初始化数据源模式
+        # 🔥 从数据库读取数据源模式（持久化）
         if "data_source_mode" not in st.session_state:
-            st.session_state.data_source_mode = "REST"  # 默认 REST 轮询
+            try:
+                bot_config = actions.get("get_bot_config", lambda: {})()
+                saved_mode = bot_config.get('data_source_mode', 'REST')
+                st.session_state.data_source_mode = saved_mode if saved_mode in ['REST', 'WebSocket'] else 'REST'
+            except Exception:
+                st.session_state.data_source_mode = "REST"
         
         # 数据源模式选项
         DATA_SOURCE_MODES = {
@@ -1651,18 +1674,19 @@ def render_sidebar(view_model, actions):
         
         # 模式说明
         if st.session_state.data_source_mode == "REST":
-            st.caption("📌 稳定优先，抗网络波动，适合大多数场景")
+            st.caption("📌 收盘信号策略推荐，每分钟00秒扫描，稳定可靠")
         else:
-            st.markdown(":red[⚠️ WebSocket 模式暂时禁用，后端强制使用 REST]")
-            st.caption("WebSocket 订阅存在问题，可能导致信号丢失，已临时禁用")
-            # 🔥 显示 WebSocket 连接状态（从数据库读取后端状态）
+            st.caption("⚡ 实时信号策略推荐，毫秒级推送，适合突破/动量策略")
+            # 🔥 显示 WebSocket 连接状态
             try:
                 from db_bridge import get_ws_status
                 ws_status = get_ws_status()
-                st.warning("⚠️ 后端已强制使用 REST 模式")
-                st.caption("WebSocket 订阅不稳定，为确保信号准确性已禁用")
+                if ws_status and ws_status.get('connected'):
+                    st.success("✅ WebSocket 已连接")
+                else:
+                    st.warning("⏳ WebSocket 连接中...")
             except ImportError:
-                st.info("💡 WebSocket 状态读取失败")
+                pass
         
         # 资产概览已移至侧边栏顶部, 此处不再重复显示
         # API 隔离状态已整合到"API 密钥管理"面板中
@@ -2622,10 +2646,46 @@ def render_dashboard(view_model, actions):
             with col_confirm:
                 if st.button("确认平仓", type="primary", width="stretch"):
                     flatten_start = time.time()
-                    actions.get("set_control_flags", lambda **kwargs: None)(emergency_flatten=1)
-                    flatten_time = time.time() - flatten_start
-                    st.session_state.flatten_confirm_pending = False
-                    st.warning(f"⚠️ 已发送平仓信号 | 持仓 {len(open_positions)} | 耗时: {flatten_time:.2f}s")
+                    
+                    # 🔥 即时平仓：直接执行，不等待扫描周期
+                    try:
+                        from db_bridge import execute_immediate_flatten, get_bot_config
+                        
+                        # 获取运行模式
+                        bot_config = get_bot_config()
+                        run_mode = bot_config.get('run_mode', 'paper')
+                        
+                        if run_mode == 'live':
+                            # 🔥 实盘模式：仍然使用标志位，让后端处理（后端有交易所适配器）
+                            # 但同时也清理数据库记录，确保 UI 立即更新
+                            actions.get("set_control_flags", lambda **kwargs: None)(emergency_flatten=1)
+                            flatten_time = time.time() - flatten_start
+                            st.session_state.flatten_confirm_pending = False
+                            st.warning(f"⚠️ [实盘] 已发送平仓信号到后端 | 持仓 {len(open_positions)} | 耗时: {flatten_time:.2f}s")
+                        else:
+                            # 🔥 测试模式：直接执行即时平仓
+                            flatten_result = execute_immediate_flatten(
+                                run_mode=run_mode,
+                                exchange_adapter=None,
+                                leverage=20
+                            )
+                            
+                            flatten_time = time.time() - flatten_start
+                            st.session_state.flatten_confirm_pending = False
+                            
+                            if flatten_result['success']:
+                                closed_count = len(flatten_result['closed_positions'])
+                                total_pnl = flatten_result['total_pnl']
+                                new_equity = flatten_result['new_equity']
+                                
+                                st.success(f"✅ 即时平仓完成 | 平仓: {closed_count} | PnL: ${total_pnl:.2f} | 新权益: ${new_equity:.2f} | 耗时: {flatten_time:.2f}s")
+                            else:
+                                st.error(f"❌ 平仓失败: {'; '.join(flatten_result['errors'][:3])}")
+                        
+                    except Exception as e:
+                        st.session_state.flatten_confirm_pending = False
+                        st.error(f"❌ 平仓异常: {str(e)}")
+                    
                     time.sleep(0.5)
                     st.rerun()
             with col_cancel:
