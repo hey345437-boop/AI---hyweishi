@@ -178,6 +178,7 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
     1. 使用独立缓存字典 _UI_KLINE_CACHE
     2. 强制返回收盘K线（去掉最后一根正在形成的K线）
     3. 不影响交易引擎的数据
+    4. 自动检测系统代理
     """
     import time as time_module
     cache_key = (symbol, timeframe)
@@ -195,19 +196,31 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
         from dotenv import load_dotenv
         load_dotenv()
         
-        # 获取代理配置
+        # 获取代理配置（优先环境变量，否则自动检测）
         http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
         https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        
+        # 🔥 如果环境变量没有代理，自动检测系统代理
+        if not http_proxy and not https_proxy:
+            try:
+                from env_validator import EnvironmentValidator
+                proxy_config = EnvironmentValidator.detect_system_proxy()
+                http_proxy = proxy_config.get('http_proxy')
+                https_proxy = proxy_config.get('https_proxy') or http_proxy
+                if http_proxy or https_proxy:
+                    print(f"[K线图] 自动检测到系统代理: {https_proxy or http_proxy}")
+            except Exception as e:
+                print(f"[K线图] 自动检测代理失败: {e}")
         
         config = {
             'enableRateLimit': True,
             'options': {'defaultType': 'swap'}
         }
         
-        if https_proxy:
+        if https_proxy or http_proxy:
             config['proxies'] = {
                 'http': http_proxy or https_proxy,
-                'https': https_proxy
+                'https': https_proxy or http_proxy
             }
         
         exchange = ccxt.okx(config)

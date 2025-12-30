@@ -360,9 +360,29 @@ class OKXAdapter(ExchangeAdapter):
         from urllib3.exceptions import MaxRetryError, NewConnectionError
         from requests.exceptions import ConnectionError, Timeout
         
-        # 获取代理配置
+        # 获取代理配置（优先环境变量，否则自动检测）
         http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
         https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
+        
+        # 🔥 如果环境变量没有代理，自动检测系统代理
+        if not http_proxy and not https_proxy:
+            try:
+                from env_validator import EnvironmentValidator
+                proxy_config = EnvironmentValidator.detect_system_proxy()
+                http_proxy = proxy_config.get('http_proxy')
+                https_proxy = proxy_config.get('https_proxy') or http_proxy
+                if http_proxy or https_proxy:
+                    logger.info(f"[PROXY] 自动检测到系统代理: {https_proxy or http_proxy}")
+                    # 同时设置环境变量，让其他模块也能使用
+                    if http_proxy:
+                        os.environ['HTTP_PROXY'] = http_proxy
+                        os.environ['http_proxy'] = http_proxy
+                    if https_proxy:
+                        os.environ['HTTPS_PROXY'] = https_proxy
+                        os.environ['https_proxy'] = https_proxy
+            except Exception as e:
+                logger.debug(f"自动检测代理失败: {e}")
+        
         proxies = {}
         if http_proxy:
             proxies['http'] = http_proxy
@@ -381,10 +401,10 @@ class OKXAdapter(ExchangeAdapter):
             }
             
             # 添加代理配置
-            if https_proxy:
+            if https_proxy or http_proxy:
                 exchange_config['proxies'] = {
                     'http': http_proxy or https_proxy,
-                    'https': https_proxy
+                    'https': https_proxy or http_proxy
                 }
             
             # 创建交易所实例
@@ -468,13 +488,13 @@ class OKXAdapter(ExchangeAdapter):
                 params=params or {}
             )
         except ccxt.NetworkError as e:
-            logger.error(f"Network error when fetching OHLCV for {symbol}: {e}")
+            logger.debug(f"Network error when fetching OHLCV for {symbol}: {e}")
             raise
         except ccxt.ExchangeError as e:
-            logger.error(f"Exchange error when fetching OHLCV for {symbol}: {e}")
+            logger.debug(f"Exchange error when fetching OHLCV for {symbol}: {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error when fetching OHLCV for {symbol}: {e}")
+            logger.debug(f"Unexpected error when fetching OHLCV for {symbol}: {e}")
             raise
     
     def _connection_self_check(self) -> bool:

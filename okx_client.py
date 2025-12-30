@@ -650,7 +650,7 @@ def load_config_from_env(mode: Mode) -> OkxConfig:
     环境变量命名规则：
     - 实盘: OKX_API_KEY_LIVE, OKX_SECRET_LIVE, OKX_PASSPHRASE_LIVE
     - 模拟盘: OKX_API_KEY_DEMO, OKX_SECRET_DEMO, OKX_PASSPHRASE_DEMO
-    - 代理: HTTP_PROXY 或 HTTPS_PROXY
+    - 代理: HTTP_PROXY 或 HTTPS_PROXY（如果未设置，自动检测系统代理）
     """
     if mode == Mode.DEMO:
         suffix = "DEMO"
@@ -661,8 +661,19 @@ def load_config_from_env(mode: Mode) -> OkxConfig:
     secret = os.getenv(f"OKX_SECRET_{suffix}", "")
     password = os.getenv(f"OKX_PASSPHRASE_{suffix}", "")
     
-    # 代理配置
+    # 代理配置：优先使用环境变量，否则自动检测
     proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")
+    
+    if not proxy:
+        # 自动检测系统代理
+        try:
+            from env_validator import EnvironmentValidator
+            proxy_config = EnvironmentValidator.detect_system_proxy()
+            proxy = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
+            if proxy:
+                logger.info(f"自动检测到系统代理: {proxy}")
+        except Exception as e:
+            logger.debug(f"自动检测代理失败: {e}")
     
     # 市场类型
     market_type_str = os.getenv("OKX_MARKET_TYPE", "swap").lower()

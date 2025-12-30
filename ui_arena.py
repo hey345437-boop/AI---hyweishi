@@ -3859,21 +3859,174 @@ def _show_ai_advisor_dialog():
             st.error(f"(；′⌒`) 分析出错: {error_msg}")
 
 
+def _calculate_price_structure(ohlcv: list, indicators: dict) -> str:
+    """
+    计算价格结构信息，帮助 AI 判断入场点位
+    
+    使用更精准的方法：
+    1. Swing High/Low 识别局部高低点
+    2. 斐波那契回撤位
+    3. 价格密集区（成交量加权）
+    4. 布林带和均线
+    """
+    if not ohlcv or len(ohlcv) < 50:
+        return "数据不足"
+    
+    # 提取价格数据
+    closes = [k[4] for k in ohlcv]
+    highs = [k[2] for k in ohlcv]
+    lows = [k[3] for k in ohlcv]
+    volumes = [k[5] for k in ohlcv]
+    
+    current_price = closes[-1]
+    
+    # ========== 1. Swing High/Low 识别 ==========
+    def find_swing_points(prices_high, prices_low, lookback=5):
+        """识别局部高低点（Swing High/Low）"""
+        swing_highs = []
+        swing_lows = []
+        
+        for i in range(lookback, len(prices_high) - lookback):
+            # Swing High: 当前高点比前后 lookback 根 K 线都高
+            is_swing_high = all(prices_high[i] >= prices_high[i-j] for j in range(1, lookback+1)) and \
+                           all(prices_high[i] >= prices_high[i+j] for j in range(1, lookback+1))
+            if is_swing_high:
+                swing_highs.append(prices_high[i])
+            
+            # Swing Low: 当前低点比前后 lookback 根 K 线都低
+            is_swing_low = all(prices_low[i] <= prices_low[i-j] for j in range(1, lookback+1)) and \
+                          all(prices_low[i] <= prices_low[i+j] for j in range(1, lookback+1))
+            if is_swing_low:
+                swing_lows.append(prices_low[i])
+        
+        return swing_highs, swing_lows
+    
+    swing_highs, swing_lows = find_swing_points(highs, lows, lookback=3)
+    
+    # 筛选当前价格附近的关键位（上方阻力、下方支撑）
+    resistances = sorted([h for h in swing_highs if h > current_price])[:3]  # 最近3个阻力
+    supports = sorted([l for l in swing_lows if l < current_price], reverse=True)[:3]  # 最近3个支撑
+    
+    # ========== 2. 斐波那契回撤位 ==========
+    # 使用近期最高最低点计算
+    recent_high = max(highs[-100:])
+    recent_low = min(lows[-100:])
+    fib_range = recent_high - recent_low
+    
+    # 判断趋势方向（用于确定斐波那契方向）
+    is_uptrend = closes[-1] > closes[-50] if len(closes) >= 50 else True
+    
+    if is_uptrend:
+        # 上涨趋势：从低点向高点画斐波那契
+        fib_236 = recent_low + fib_range * 0.236
+        fib_382 = recent_low + fib_range * 0.382
+        fib_500 = recent_low + fib_range * 0.500
+        fib_618 = recent_low + fib_range * 0.618
+        fib_786 = recent_low + fib_range * 0.786
+    else:
+        # 下跌趋势：从高点向低点画斐波那契
+        fib_236 = recent_high - fib_range * 0.236
+        fib_382 = recent_high - fib_range * 0.382
+        fib_500 = recent_high - fib_range * 0.500
+        fib_618 = recent_high - fib_range * 0.618
+        fib_786 = recent_high - fib_range * 0.786
+    
+    # ========== 3. 价格密集区（成交量加权） ==========
+    def find_volume_clusters(closes, volumes, num_bins=20):
+        """找出成交量密集的价格区间"""
+        if not closes or not volumes:
+            return []
+        
+        price_min, price_max = min(closes), max(closes)
+        if price_max == price_min:
+            return []
+        
+        bin_size = (price_max - price_min) / num_bins
+        volume_profile = {}
+        
+        for price, vol in zip(closes, volumes):
+            bin_idx = int((price - price_min) / bin_size)
+            bin_idx = min(bin_idx, num_bins - 1)
+            bin_price = price_min + (bin_idx + 0.5) * bin_size
+            volume_profile[bin_price] = volume_profile.get(bin_price, 0) + vol
+        
+        # 按成交量排序，取前3个密集区
+        sorted_levels = sorted(volume_profile.items(), key=lambda x: x[1], reverse=True)[:3]
+        return [level[0] for level in sorted_levels]
+    
+    volume_clusters = find_volume_clusters(closes[-200:], volumes[-200:])
+    
+    # ========== 4. 布林带和均线 ==========
+    boll_upper = indicators.get('BOLL_upper', current_price * 1.02)
+    boll_middle = indicators.get('BOLL_middle', current_price)
+    boll_lower = indicators.get('BOLL_lower', current_price * 0.98)
+    
+    ma20 = indicators.get('MA_20', current_price)
+    ma50 = indicators.get('MA_50', current_price)
+    ema12 = indicators.get('EMA_12', current_price)
+    ema26 = indicators.get('EMA_26', current_price)
+    
+    # ========== 5. 价格位置分析 ==========
+    price_vs_ma20 = "上方" if current_price > ma20 else "下方"
+    price_vs_boll_mid = "上方" if current_price > boll_middle else "下方"
+    trend_text = "上涨趋势" if is_uptrend else "下跌趋势"
+    
+    # 近期走势
+    recent_5_closes = closes[-5:]
+    trend_pct = ((recent_5_closes[-1] - recent_5_closes[0]) / recent_5_closes[0]) * 100
+    
+    # ========== 构建价格结构文本 ==========
+    structure_text = f"""### 当前状态
+- 当前价格: {current_price:.2f}
+- 趋势判断: {trend_text}
+- 近5根K线: {'上涨' if trend_pct > 0 else '下跌'} {abs(trend_pct):.2f}%
+
+### Swing 支撑阻力位（局部高低点）
+- 阻力位: {', '.join([f'{r:.2f}' for r in resistances]) if resistances else '暂无明显阻力'}
+- 支撑位: {', '.join([f'{s:.2f}' for s in supports]) if supports else '暂无明显支撑'}
+
+### 斐波那契回撤位（近100根K线）
+- 近期最高: {recent_high:.2f}
+- 近期最低: {recent_low:.2f}
+- Fib 23.6%: {fib_236:.2f}
+- Fib 38.2%: {fib_382:.2f}
+- Fib 50.0%: {fib_500:.2f}
+- Fib 61.8%: {fib_618:.2f}
+- Fib 78.6%: {fib_786:.2f}
+
+### 成交量密集区（潜在支撑阻力）
+{chr(10).join([f'- {v:.2f}' for v in volume_clusters]) if volume_clusters else '- 暂无明显密集区'}
+
+### 布林带
+- 上轨: {boll_upper:.2f}
+- 中轨: {boll_middle:.2f} (价格在其{price_vs_boll_mid})
+- 下轨: {boll_lower:.2f}
+
+### 均线
+- MA20: {ma20:.2f} (价格在其{price_vs_ma20})
+- MA50: {ma50:.2f}
+- EMA12: {ema12:.2f}
+- EMA26: {ema26:.2f}"""
+    
+    return structure_text
+
+
 def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
     """
     AI 顾问分析（独立模块，使用宽松提示词）
     
     与 AI 交易员不同，这里必须给出方向和点位，不允许拒绝
+    增强版：提供更多价格结构信息帮助 AI 判断入场点位
     """
     try:
-        # 1. 获取市场数据
+        # 1. 获取市场数据（增加到 500 根 K 线）
         from ai_indicators import get_data_source, IndicatorCalculator
         
         data_source = get_data_source()
         calculator = IndicatorCalculator()
         
-        # 获取 K 线数据
-        ohlcv = data_source.fetch_ohlcv(symbol, timeframe, 100)
+        # 获取 K 线数据（500 根，用于更准确的指标计算和价格结构分析）
+        ohlcv = data_source.fetch_ohlcv(symbol, timeframe, 500)
         if not ohlcv or len(ohlcv) < 50:
             return {'error': 'K 线数据不足'}
         
@@ -3887,6 +4040,9 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
         # 获取 ATR 用于计算止损止盈
         atr = latest_values.get('ATR', current_price * 0.01)
         
+        # 🔥 新增：计算价格结构信息
+        price_structure = _calculate_price_structure(ohlcv, latest_values)
+        
         # 2. 获取 DeepSeek API Key
         from ai_config_manager import AIConfigManager
         config_mgr = AIConfigManager()
@@ -3896,11 +4052,11 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
         if ai_to_use not in ai_configs or not ai_configs[ai_to_use].get('api_key'):
             return {'error': '请先配置 DeepSeek API Key'}
         
-        # 3. 独立的宽松提示词 - 必须给出方向和点位
+        # 3. 增强版提示词 - 包含价格结构信息
         symbol_short = symbol.replace('/USDT:USDT', '').replace('/USDT', '')
-        analysis_prompt = f"""你是一位加密货币交易顾问。用户询问 {symbol_short} 的交易建议。
+        analysis_prompt = f"""你是一位专业的加密货币交易顾问。用户询问 {symbol_short} 的交易建议。
 
-## 市场数据
+## 技术指标
 {formatted}
 
 ## 当前价格
@@ -3909,26 +4065,31 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
 ## ATR (波动率)
 {atr:.2f}
 
+## 价格结构分析
+{price_structure}
+
 ## 重要要求
-你必须给出明确的交易方向和具体点位，不允许说"观望"或"等待"。
-即使市场不明朗，也要根据技术指标给出倾向性建议。
+1. 你必须给出明确的交易方向和具体点位
+2. 入场价应该参考支撑/阻力位，不要简单用当前价
+3. 止损应该设在关键支撑/阻力位之外
+4. 止盈应该设在下一个阻力/支撑位附近
 
 ## 输出要求
 1. signal: 必须是 "open_long"（做多）或 "open_short"（做空）
-2. entry_price: 入场价（可以是当前价或挂单价）
-3. stop_loss: 止损价（建议用 1-2 倍 ATR）
-4. take_profit: 止盈价（建议用 2-3 倍 ATR）
+2. entry_price: 入场价（参考支撑阻力位）
+3. stop_loss: 止损价（关键位置之外）
+4. take_profit: 止盈价（下一个关键位置）
 5. confidence: 置信度 1-100
-6. reasoning: 简要分析理由（50字以内）
+6. reasoning: 简要分析理由（包含关键价位分析，80字以内）
 
 ## 输出格式（严格 JSON）
 {{
     "signal": "open_long",
-    "entry_price": {current_price:.2f},
-    "stop_loss": {current_price - atr * 1.5:.2f},
-    "take_profit": {current_price + atr * 3:.2f},
-    "confidence": 65,
-    "reasoning": "RSI 处于中性偏多，MACD 柱状图转正，建议轻仓试多"
+    "entry_price": 88500.00,
+    "stop_loss": 87800.00,
+    "take_profit": 90200.00,
+    "confidence": 72,
+    "reasoning": "价格回踩布林中轨88600支撑，RSI超卖反弹，目标上轨90000附近"
 }}"""
 
         # 4. 直接调用 API（不使用 agent，避免被风控拦截）
@@ -3938,7 +4099,7 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
         api_key = ai_configs[ai_to_use].get('api_key', '')
         
         messages = [
-            {"role": "system", "content": "你是专业的加密货币交易顾问，必须给出明确的交易方向和点位。只输出 JSON，不要其他内容。"},
+            {"role": "system", "content": "你是专业的加密货币交易顾问，擅长技术分析和价格结构分析。必须给出明确的交易方向和基于支撑阻力的具体点位。只输出 JSON，不要其他内容。"},
             {"role": "user", "content": analysis_prompt}
         ]
         

@@ -782,6 +782,7 @@ def main():
     # 初始化交易所适配器
     exchange = None
     provider = None
+    ws_provider = None  # 🔥 修复：在 try 块外初始化，避免 UnboundLocalError
     
     try:
         # 从bot_config获取API密钥（使用受信任的后端解密接口）

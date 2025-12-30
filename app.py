@@ -35,27 +35,23 @@ try:
 except ImportError:
     pass  # dotenv 未安装，跳过
 
-# ============ 启动前检查 ============
-# 在导入其他模块前执行启动验证
+# ============ 启动前检查（简化版）============
+# 只检查关键依赖，配置通过前端 UI 输入
 try:
     from startup_validator import StartupValidator
-    all_passed, check_results = StartupValidator.run_full_check(verbose=False)
-    if not all_passed:
+    # 只检查 Python 包，跳过配置和数据库检查
+    pkg_ok, missing_req, missing_opt = StartupValidator.check_packages(verbose=False)
+    if not pkg_ok:
         st.error("❌ 启动检查失败")
-        if check_results.get('packages', {}).get('missing_required'):
-            st.error(f"缺失 Python 依赖: {', '.join(check_results['packages']['missing_required'])}")
-            st.info("请运行: pip install -r requirements.txt")
-        if not check_results.get('config', {}).get('is_valid'):
-            config_detail = check_results.get('config', {})
-            st.error(f"缺失必需配置: {', '.join(config_detail.get('missing_required', []))}")
-            st.info("请设置对应的环境变量或使用 .env 文件")
-        if not check_results.get('database', {}).get('ok'):
-            st.error(f"数据库检查失败: {check_results['database'].get('message', '未知错误')}")
+        st.error(f"缺失 Python 依赖: {', '.join(missing_req)}")
+        st.info("请运行: pip install -r requirements.txt")
         st.stop()
+except ImportError:
+    # startup_validator 不存在，跳过检查
+    pass
 except Exception as e:
-    st.error(f"❌ 启动检查异常: {str(e)[:200]}")
-    st.info("请确保所有依赖已安装，且配置文件正确")
-    st.stop()
+    # 其他异常，记录但不阻止启动
+    print(f"启动检查警告: {e}")
 
 # 导入项目模块
 try:

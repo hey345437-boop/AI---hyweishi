@@ -155,7 +155,7 @@ class MarketDataProvider:
                 # 确保不超过最大延迟
                 final_delay = min(jitter, max_delay)
                 
-                logger.warning(f"[重试] {endpoint} {symbol} - {e}，将在 {final_delay:.2f}s 后重试")
+                logger.debug(f"[重试] {endpoint} {symbol} - {e}，将在 {final_delay:.2f}s 后重试")
                 time.sleep(final_delay)
         
         # 理论上不会到达这里，但为了类型安全
@@ -525,11 +525,11 @@ class MarketDataProvider:
                 continue
             
             try:
-                logger.info(f"[md-retry] {symbol} {timeframe} 重试初始化 (第{retry_count + 1}次)")
+                logger.debug(f"[md-retry] {symbol} {timeframe} 重试初始化 (第{retry_count + 1}次)")
                 self.get_ohlcv(symbol, timeframe, force_fetch=True)
                 results[key] = True
             except Exception as e:
-                logger.error(f"[md-retry-fail] {symbol} {timeframe} 重试失败: {e}")
+                logger.debug(f"[md-retry-fail] {symbol} {timeframe} 重试失败: {e}")
                 results[key] = False
         
         return results
