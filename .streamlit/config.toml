@@ -4,6 +4,9 @@ port = 10000
 enableCORS = false
 enableXsrfProtection = false
 
+[logger]
+level = "error"
+
 [browser]
 gatherUsageStats = false
 

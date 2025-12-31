@@ -1,12 +1,27 @@
-# exchange_adapters/okx_adapter.py
-# OKX 交易所适配器
-# 
-# 重要说明：本系统只支持两种模式
-# - live: 实盘模式，真实下单
-# - paper_on_real: 实盘测试模式，用实盘行情但本地模拟下单
-# 
-# 两种模式都必须使用实盘 API Key，绝对禁止 demo/sandbox
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
+#
+"""
+OKX 交易所适配器
 
+支持两种模式：
+- live: 实盘模式，真实下单
+- paper_on_real: 实盘测试模式，用实盘行情但本地模拟下单
+"""
 import ccxt
 import logging
 import os
@@ -16,8 +31,6 @@ import uuid
 import time
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
-
-# ============ Windows UTF-8 编码修复 ============
 if sys.platform.startswith('win'):
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -200,15 +213,15 @@ class OKXAdapter(ExchangeAdapter):
         self.secret = config.get('api_secret')
         self.password = config.get('api_passphrase')
         
-        # 🔥 关键修复：统一使用 'live' 和 'paper' 两种模式
+        # 关键修复：统一使用 'live' 和 'paper' 两种模式
         # run_mode: 'live' = 真实下单, 'paper' = 本地模拟
         raw_mode = config.get('run_mode', 'paper')
         
-        # 🔥 强制禁用 sandbox/demo
+        # 强制禁用 sandbox/demo
         # 无论传入什么配置，都强制设为 False
         self._sandbox_disabled = True
         
-        # 🔥 统一模式映射
+        # 统一模式映射
         # 禁止的模式
         FORBIDDEN_MODES = {'demo', 'sandbox', 'test'}
         if raw_mode.lower() in FORBIDDEN_MODES:
@@ -260,12 +273,12 @@ class OKXAdapter(ExchangeAdapter):
         # 订单数量计算器
         self.order_size_calculator = OrderSizeCalculator(self)
         
-        # 🔥 本地模拟撮合器 (paper_on_real 模式使用)
+        # 本地模拟撮合器 (paper_on_real 模式使用)
         self.paper_broker = LocalPaperBroker()
         
     def _validate_environment(self):
         """
-        🔥 启动自检：验证环境配置
+         启动自检：验证环境配置
         
         检查项：
         1. x-simulated-trading 必须为 0
@@ -340,7 +353,7 @@ class OKXAdapter(ExchangeAdapter):
                 else:
                     api_url = str(api)
         
-        # 🔥 只记录日志，不打印到控制台（防止刷屏）
+        # 只记录日志，不打印到控制台（防止刷屏）
         logger.info(f"OKX适配器初始化: run_mode={self.run_mode}, sandbox={sandbox_status}, sim_trading={sim_trading}")
         
     def normalize_symbol(self, symbol: str) -> str:
@@ -364,7 +377,7 @@ class OKXAdapter(ExchangeAdapter):
         http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
         https_proxy = os.getenv('HTTPS_PROXY') or os.getenv('https_proxy')
         
-        # 🔥 如果环境变量没有代理，自动检测系统代理
+        # 如果环境变量没有代理，自动检测系统代理
         if not http_proxy and not https_proxy:
             try:
                 from env_validator import EnvironmentValidator
@@ -410,11 +423,11 @@ class OKXAdapter(ExchangeAdapter):
             # 创建交易所实例
             self.exchange = ccxt.okx(exchange_config)
             
-            # 🔥 关键修复：强制禁用 sandbox 模式
+            # 关键修复：强制禁用 sandbox 模式
             # 无论任何配置，都强制设为 False
             self.exchange.set_sandbox_mode(False)
             
-            # 🔥 关键修复：强制设置 x-simulated-trading=0
+            # 关键修复：强制设置 x-simulated-trading=0
             # 确保所有请求都不带模拟交易头
             if not hasattr(self.exchange, 'headers'):
                 self.exchange.headers = {}
@@ -443,7 +456,7 @@ class OKXAdapter(ExchangeAdapter):
                     else:
                         raise
         
-        # 🔥 启动自检：验证环境配置
+        # 启动自检：验证环境配置
         self._validate_environment()
         
         # 打印启动摘要
@@ -669,7 +682,7 @@ class OKXAdapter(ExchangeAdapter):
             if reduce_only and 'reduceOnly' not in params:
                 params['reduceOnly'] = True
             
-            # 🔥 关键路由：根据 run_mode 决定是否真实下单
+            # 关键路由：根据 run_mode 决定是否真实下单
             if self.run_mode == 'paper':
                 # paper 模式：路由到本地模拟
                 logger.warning(
@@ -763,7 +776,7 @@ class OKXAdapter(ExchangeAdapter):
             
             normalized_symbol = self.normalize_symbol(symbol) if symbol else None
             
-            # 🔥 关键路由
+            # 关键路由
             if self.run_mode == 'paper':
                 logger.warning(
                     f"[paper] blocked_real_trade op=cancel_order "
@@ -1002,7 +1015,7 @@ class OKXAdapter(ExchangeAdapter):
             
             normalized_symbol = self.normalize_symbol(symbol)
             
-            # 🔥 关键路由
+            # 关键路由
             if self.run_mode == 'paper':
                 logger.warning(
                     f"[paper] blocked_real_trade op=close_position "

@@ -1,18 +1,24 @@
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
 """
 实时信号策略 v3: 布林带 + ADX
 
-特点：
-- 专为 WebSocket 实时数据设计
-- 不等待K线收盘，实时触发信号
-- 布林带突破 + ADX趋势强度过滤
-- 适合突破/动量交易
-
-信号逻辑：
-- 做多：价格突破布林带上轨 + ADX > 25（趋势确认）
-- 做空：价格跌破布林带下轨 + ADX > 25（趋势确认）
-- 平仓：价格回归布林带中轨
+专为 WebSocket 实时数据设计，不等待K线收盘
 """
-
 import pandas as pd
 import numpy as np
 
@@ -21,7 +27,7 @@ class RealtimeStrategy:
     """
     实时信号策略：布林带突破 + ADX趋势过滤
     
-    🔥 与收盘信号策略的区别：
+    与收盘信号策略的区别：
     - 收盘信号：等待K线收盘后判断（使用 df.iloc[-2]）
     - 实时信号：使用当前未收盘K线实时判断（使用 df.iloc[-1]）
     """
@@ -101,7 +107,7 @@ class RealtimeStrategy:
     
     def check_signals(self, df, timeframe='1m'):
         """
-        🔥 实时信号检测 - 使用当前未收盘K线
+        实时信号检测 - 使用当前未收盘K线
         
         与收盘信号策略的关键区别：
         - 收盘策略：curr = df.iloc[-2]（已收盘K线）
@@ -110,7 +116,7 @@ class RealtimeStrategy:
         if len(df) < 3:
             return {"action": "HOLD", "reason": "数据不足", "type": "NONE"}
         
-        # 🔥 实时模式：使用当前未收盘的K线
+        # 实时模式：使用当前未收盘的K线
         curr = df.iloc[-1]   # 当前K线（实时数据）
         prev = df.iloc[-2]   # 上一根已收盘K线
         
@@ -216,7 +222,7 @@ class RealtimeStrategy:
                 df_with_indicators = self.calculate_indicators(df)
                 sig = self.check_signals(df_with_indicators, timeframe=tf)
                 
-                # 🔥 实时模式：使用当前K线时间戳
+                # 实时模式：使用当前K线时间戳
                 candle_time = None
                 if len(df_with_indicators) >= 1:
                     candle_time = df_with_indicators.iloc[-1].get('timestamp')

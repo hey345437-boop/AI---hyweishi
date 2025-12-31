@@ -1,4 +1,19 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
 """
 初始化缺失的 AI 统计记录
 
@@ -41,7 +56,7 @@ def init_missing_ai_stats():
                 INSERT OR IGNORE INTO ai_stats (agent_name, last_updated)
                 VALUES (?, ?)
             """, (agent, int(time.time() * 1000)))
-            print(f"  ✅ 已添加: {agent}")
+            print(f"   已添加: {agent}")
         conn.commit()
     else:
         print("所有 AI 统计记录已存在")

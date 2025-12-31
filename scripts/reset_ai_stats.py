@@ -1,4 +1,19 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
 """
 重置 AI 统计数据
 
@@ -45,7 +60,7 @@ def reset_ai_stats():
             avg_pnl = 0.0
     """)
     conn.commit()
-    print(f"\n✅ 已重置 {cursor.rowcount} 条统计记录")
+    print(f"\n 已重置 {cursor.rowcount} 条统计记录")
     
     # 关闭所有持仓（可选）
     cursor.execute("SELECT COUNT(*) FROM ai_positions WHERE status = 'open'")
@@ -57,7 +72,7 @@ def reset_ai_stats():
         if response.lower() == 'y':
             cursor.execute("DELETE FROM ai_positions WHERE status = 'open'")
             conn.commit()
-            print(f"✅ 已删除 {cursor.rowcount} 个持仓")
+            print(f" 已删除 {cursor.rowcount} 个持仓")
     
     # 查看重置后的统计
     cursor.execute("SELECT * FROM ai_stats")

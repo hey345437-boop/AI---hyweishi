@@ -1,14 +1,30 @@
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
+# ============================================================================
 """
 对冲仓位管理模块
 
 实现以下核心逻辑：
-1. 差值止盈逃生 (Net PnL Escape) - 有对冲仓时，净收益率 > hedge_tp_pct 全仓平仓
-2. 硬止盈 (Hard Take Profit) - 仅主仓时，本金盈利 > hard_tp_pct 平仓
-3. 顺势解对冲 (Smart Unhook) - 新信号方向 == 主仓方向时，平掉对冲仓
-4. 对冲转正 (Hedge Inheritance) - 主仓不存在但有对冲仓时，对冲仓转为主仓
-5. 对冲开仓 - 新信号方向与主仓相反时，开对冲仓（最多2个）
+1. 差值止盈逃生 - 有对冲仓时，净收益率达标全仓平仓
+2. 硬止盈 - 仅主仓时，本金盈利达标平仓
+3. 顺势解对冲 - 新信号与主仓同向时，平掉对冲仓
+4. 对冲转正 - 主仓不存在但有对冲仓时，对冲仓转为主仓
+5. 对冲开仓 - 新信号与主仓相反时，开对冲仓（最多2个）
 """
-
 import time
 import logging
 from typing import Dict, Any, Optional, Tuple, List
@@ -22,7 +38,8 @@ class HedgeManager:
     MAX_HEDGE_COUNT = 2  # 单币种最多2个对冲仓
     
     def __init__(self, db_bridge_module, leverage: int = 20, 
-                 hard_tp_pct: float = 0.02, hedge_tp_pct: float = 0.005):
+                 hard_tp_pct: float = 0.02, hedge_tp_pct: float = 0.005,
+                 custom_stop_loss_pct: float = 0.02):
         """
         初始化对冲管理器
         
@@ -31,14 +48,16 @@ class HedgeManager:
             leverage: 杠杆倍数
             hard_tp_pct: 硬止盈比例（仅主仓时）
             hedge_tp_pct: 对冲止盈比例（有对冲仓时）
+            custom_stop_loss_pct: 自定义策略止损比例
         """
         self.db = db_bridge_module
         self.leverage = leverage
         self.hard_tp_pct = hard_tp_pct
         self.hedge_tp_pct = hedge_tp_pct
+        self.custom_stop_loss_pct = custom_stop_loss_pct
     
     def update_params(self, leverage: int = None, hard_tp_pct: float = None, 
-                      hedge_tp_pct: float = None):
+                      hedge_tp_pct: float = None, custom_stop_loss_pct: float = None):
         """更新交易参数"""
         if leverage is not None:
             self.leverage = leverage
@@ -46,6 +65,8 @@ class HedgeManager:
             self.hard_tp_pct = hard_tp_pct
         if hedge_tp_pct is not None:
             self.hedge_tp_pct = hedge_tp_pct
+        if custom_stop_loss_pct is not None:
+            self.custom_stop_loss_pct = custom_stop_loss_pct
     
     def get_main_position(self, symbol: str) -> Optional[Dict[str, Any]]:
         """获取主仓位"""
@@ -101,7 +122,7 @@ class HedgeManager:
         pnl = self.calculate_position_pnl(main_pos, current_price)
         
         # 计算本金收益率（不带杠杆）
-        # 🔥 修复：硬止盈应该基于本金收益率，而不是杠杆收益率
+        # 修复：硬止盈应该基于本金收益率，而不是杠杆收益率
         # 本金收益率 = (当前价格 - 入场价格) / 入场价格
         entry_price = main_pos.get('entry_price', 0)
         pos_side = main_pos.get('pos_side', 'long')
@@ -118,6 +139,42 @@ class HedgeManager:
         # 检查是否达到硬止盈条件（基于本金收益率）
         if roi >= self.hard_tp_pct:
             reason = f"硬止盈触发: ROI={roi*100:.2f}% >= {self.hard_tp_pct*100:.1f}%"
+            return True, pnl, reason
+        
+        return False, 0.0, ""
+    
+    def check_stop_loss(self, symbol: str, current_price: float) -> Tuple[bool, float, str]:
+        """
+        检查止损条件（自定义策略使用）
+        
+        Returns:
+            (should_close, pnl, reason)
+        """
+        main_pos = self.get_main_position(symbol)
+        
+        # 没有主仓则不检查
+        if not main_pos:
+            return False, 0.0, ""
+        
+        # 计算主仓浮盈
+        pnl = self.calculate_position_pnl(main_pos, current_price)
+        
+        # 计算本金收益率
+        entry_price = main_pos.get('entry_price', 0)
+        pos_side = main_pos.get('pos_side', 'long')
+        
+        if entry_price <= 0:
+            return False, 0.0, ""
+        
+        # 计算本金收益率（不带杠杆）
+        if pos_side == 'long':
+            roi = (current_price - entry_price) / entry_price
+        else:  # short
+            roi = (entry_price - current_price) / entry_price
+        
+        # 检查是否达到止损条件（亏损超过阈值）
+        if roi <= -self.custom_stop_loss_pct:
+            reason = f"止损触发: ROI={roi*100:.2f}% <= -{self.custom_stop_loss_pct*100:.1f}%"
             return True, pnl, reason
         
         return False, 0.0, ""
@@ -270,7 +327,7 @@ class HedgeManager:
             # 删除数据库记录
             self.db.delete_paper_position(symbol, main_pos.get('pos_side'))
             
-            # 🔥 更新模拟账户余额（平仓后释放保证金 + 盈亏）
+            # 更新模拟账户余额（平仓后释放保证金 + 盈亏）
             if run_mode != 'live':
                 try:
                     paper_bal = self.db.get_paper_balance()
@@ -290,7 +347,7 @@ class HedgeManager:
                 except Exception as e:
                     logger.error(f"更新模拟余额失败: {e}")
             
-            # 🔥 记录交易历史（用于计算胜率等统计）
+            # 记录交易历史（用于计算胜率等统计）
             try:
                 entry_price = main_pos.get('entry_price', 0)
                 qty = main_pos.get('qty', 0)
@@ -332,7 +389,7 @@ class HedgeManager:
             # 删除数据库记录
             self.db.delete_hedge_position(hedge_pos.get('id'))
             
-            # 🔥 更新模拟账户余额（平仓后释放保证金 + 盈亏）
+            # 更新模拟账户余额（平仓后释放保证金 + 盈亏）
             if run_mode != 'live':
                 try:
                     paper_bal = self.db.get_paper_balance()
@@ -351,7 +408,7 @@ class HedgeManager:
                 except Exception as e:
                     logger.error(f"更新模拟余额失败: {e}")
             
-            # 🔥 记录交易历史（用于计算胜率等统计）
+            # 记录交易历史（用于计算胜率等统计）
             try:
                 entry_price = hedge_pos.get('entry_price', 0)
                 qty = hedge_pos.get('qty', 0)
@@ -408,7 +465,7 @@ class HedgeManager:
             
             self.db.delete_hedge_position(hedge_pos.get('id'))
             
-            # 🔥 更新模拟账户余额（平仓后释放保证金 + 盈亏）
+            # 更新模拟账户余额（平仓后释放保证金 + 盈亏）
             if run_mode != 'live':
                 try:
                     paper_bal = self.db.get_paper_balance()

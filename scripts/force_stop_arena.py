@@ -1,4 +1,19 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
 """
 强制停止 AI 竞技场
 
@@ -31,14 +46,14 @@ def force_stop():
         if running:
             print("\n正在停止调度器...")
             stop_scheduler()
-            print("✅ 停止命令已发送")
+            print(" 停止命令已发送")
         
         # 清除持久化状态
         try:
             from ai_config_manager import get_ai_config_manager
             config_mgr = get_ai_config_manager()
             config_mgr.clear_scheduler_state()
-            print("✅ 已清除持久化状态")
+            print(" 已清除持久化状态")
         except Exception as e:
             print(f"⚠️ 清除持久化状态失败: {e}")
         
@@ -51,7 +66,7 @@ def force_stop():
             print("建议: 按 Ctrl+C 停止 Streamlit，然后重新启动")
         
     except Exception as e:
-        print(f"❌ 错误: {e}")
+        print(f" 错误: {e}")
         import traceback
         traceback.print_exc()
 

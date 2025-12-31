@@ -1,8 +1,28 @@
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
+# ============================================================================
+"""
+主应用入口 - Streamlit Web UI
+"""
 import sys
 import os
 import io
 
-# ============ Windows UTF-8 编码修复 ============
+# Windows UTF-8 编码修复
 # 必须在所有其他导入之前执行，防止 UnicodeEncodeError
 def _fix_windows_encoding():
     """修复 Windows 控制台 GBK 编码问题，强制使用 UTF-8"""
@@ -60,7 +80,7 @@ try:
         get_bot_config, update_bot_config, set_control_flags,
         init_db,
         get_paper_balance, get_paper_positions, get_hedge_positions,
-        get_trade_stats, get_trade_history  # 🔥 交易统计
+        get_trade_stats, get_trade_history  # 交易统计
     )
     from db_bridge import get_bootstrap_state, get_credentials_status, verify_credentials_and_snapshot
 except ImportError as e:
@@ -75,14 +95,21 @@ except ImportError as e:
     st.error(f"❌ 导入 UI 模块失败: {str(e)[:200]}")
     st.stop()
 
-# 🔥 导入 Arena UI 模块（可选）
+# 导入 Arena UI 模块（可选）
 try:
     from ui_arena import render_arena_main, get_arena_mock_data
     HAS_ARENA_UI = True
 except ImportError:
     HAS_ARENA_UI = False
 
-# 🔥 导入 Arena 调度器模块（可选）
+# ◈ 导入策略助手 UI 模块（可选）
+try:
+    from ui_strategy_builder import render_strategy_builder
+    HAS_STRATEGY_BUILDER = True
+except ImportError:
+    HAS_STRATEGY_BUILDER = False
+
+# 导入 Arena 调度器模块（可选）
 try:
     from arena_scheduler import (
         start_scheduler, stop_scheduler, is_scheduler_running,
@@ -92,7 +119,7 @@ try:
 except ImportError:
     HAS_ARENA_SCHEDULER = False
 
-# 🔥 自动刷新组件（用于轮询 AI 决策）
+# 自动刷新组件（用于轮询 AI 决策）
 try:
     from streamlit_autorefresh import st_autorefresh
     HAS_AUTOREFRESH = True
@@ -110,7 +137,7 @@ def get_env_config(env_mode):
     """
     env_map = {
         "🛰️ 实盘测试": {"api_source": "live", "is_sandbox": False, "allow_trading": False},
-        "💰 实盘": {"api_source": "live", "is_sandbox": False, "allow_trading": True}
+        " 实盘": {"api_source": "live", "is_sandbox": False, "allow_trading": True}
     }
     return env_map.get(env_mode, {"api_source": "live", "is_sandbox": False, "allow_trading": False})
 
@@ -137,7 +164,7 @@ def load_user_state(username):
         "auto_symbols": ["BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"],
         "open_positions": {},
         "hedge_positions": {},
-        "env_mode": "💰 实盘",
+        "env_mode": " 实盘",
         "strategy_module": "strategy_v2",
         "position_sizes": {"primary": 0.05, "secondary": 0.025}
     }
@@ -158,8 +185,8 @@ def manual_scan(symbols, timeframe):
 
 def main():
     """交易系统控制面板主函数"""
-    # 🔥 设置页面标题
-    st.set_page_config(page_title="何以为势の实盘系统", page_icon="⚡", layout="wide")
+    # 设置页面标题
+    st.set_page_config(page_title="何以为势の实盘系统", page_icon="", layout="wide")
     
     # 初始化数据库，带异常处理
     try:
@@ -210,7 +237,7 @@ def main():
         "btc_price": "----",  # 应该从数据库获取
         "fear_value": "----",  # 应该从数据库获取
         "fear_level": "----",  # 应该从数据库获取
-        "env_mode": "💰 实盘",  # 应该从view_model获取
+        "env_mode": " 实盘",  # 应该从view_model获取
         "trading_active": engine_status.get("alive") == 1,
         "open_positions": {},  # 应该从数据库获取
         "hedge_positions": {},  # 应该从数据库获取
@@ -229,10 +256,10 @@ def main():
     # 根据运行模式获取相应的持仓和余额数据
     current_run_mode_db = bot_config.get("run_mode", "sim")
     
-    # 🔥 始终获取模拟账户数据（用于实盘测试模式显示）
+    # 始终获取模拟账户数据（用于实盘测试模式显示）
     paper_balance = get_paper_balance()
     paper_positions = get_paper_positions()
-    view_model["paper_balance"] = paper_balance  # 🔥 添加到view_model
+    view_model["paper_balance"] = paper_balance  # 添加到view_model
     
     if current_run_mode_db == "paper":
         # 获取实盘测试模式的模拟数据
@@ -243,7 +270,7 @@ def main():
             view_model["simulation_stats"]["initial_balance"] = paper_balance.get('equity', 200.0)
         
         if paper_positions:
-            # 🔥 转换paper_positions为view_model需要的格式
+            # 转换paper_positions为view_model需要的格式
             # 同一个symbol如果有两个方向的仓位，需要区分主仓和对冲仓
             open_positions_dict = {}
             hedge_positions_dict = {}
@@ -276,7 +303,7 @@ def main():
                     "pnl": unrealized_pnl
                 }
             
-            # 🔥 第一步：按 symbol 分组所有仓位
+            # 第一步：按 symbol 分组所有仓位
             positions_by_symbol = {}
             if isinstance(paper_positions, dict):
                 for pos_key, pos in paper_positions.items():
@@ -293,7 +320,7 @@ def main():
                             positions_by_symbol[symbol] = []
                         positions_by_symbol[symbol].append(pos)
             
-            # 🔥 第二步：区分主仓和对冲仓
+            # 第二步：区分主仓和对冲仓
             # 规则：同一个symbol如果有两个方向，先开的是主仓，后开的是对冲仓
             for symbol, positions in positions_by_symbol.items():
                 if len(positions) == 1:
@@ -312,7 +339,7 @@ def main():
             
             view_model["open_positions"] = open_positions_dict
             
-            # 🔥 同时加载 hedge_positions 表中的对冲仓位（如果有）
+            # 同时加载 hedge_positions 表中的对冲仓位（如果有）
             hedge_positions_raw = get_hedge_positions()
             if hedge_positions_raw:
                 for hedge_pos in hedge_positions_raw:
@@ -341,7 +368,7 @@ def main():
             
             view_model["hedge_positions"] = hedge_positions_dict
     
-    # 🔥 实时获取持仓数据的函数（用于 fragment 刷新）
+    # 实时获取持仓数据的函数（用于 fragment 刷新）
     def get_open_positions_formatted():
         """获取格式化的主仓数据"""
         paper_positions = get_paper_positions()
@@ -423,17 +450,20 @@ def main():
         "get_credentials_status": get_credentials_status,
         "verify_credentials_and_snapshot": verify_credentials_and_snapshot,
         "get_paper_balance": get_paper_balance,
-        "get_trade_stats": get_trade_stats,  # 🔥 交易统计
-        "get_trade_history": get_trade_history,  # 🔥 交易历史（资金曲线）
-        "get_open_positions": get_open_positions_formatted,  # 🔥 实时持仓
-        "get_hedge_positions": get_hedge_positions_formatted  # 🔥 实时对冲仓
+        "get_trade_stats": get_trade_stats,  # 交易统计
+        "get_trade_history": get_trade_history,  # 交易历史（资金曲线）
+        "get_open_positions": get_open_positions_formatted,  # 实时持仓
+        "get_hedge_positions": get_hedge_positions_formatted  # 实时对冲仓
     }
     
-    # 🔥 UI 模式切换：Arena 模式 vs 经典模式
+    # UI 模式切换：策略助手 vs Arena 模式 vs 经典模式
     # 切换按钮已移至侧边栏 (ui_legacy.py render_sidebar)
-    if HAS_ARENA_UI and st.session_state.get('arena_mode', False):
+    if HAS_STRATEGY_BUILDER and st.session_state.get('strategy_builder_mode', False):
+        # ◈ 策略助手模式
+        render_strategy_builder(view_model, actions)
+    elif HAS_ARENA_UI and st.session_state.get('arena_mode', False):
         # Arena 模式
-        # 🔥 移除全局 st_autorefresh，改用 @st.fragment 局部刷新
+        # 移除全局 st_autorefresh，改用 @st.fragment 局部刷新
         # 这样 K 线图不会因为刷新而重置
         
         # 检查是否有新决策（不再依赖全局刷新）

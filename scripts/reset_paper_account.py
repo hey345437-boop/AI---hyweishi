@@ -1,4 +1,19 @@
-#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ============================================================================
+#
+#    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
+#   | | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
+#   | |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
+#   |  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
+#   |_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
+#
+#                         何 以 为 势
+#                  Quantitative Trading System
+#
+#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
+#   License: Apache License 2.0
+#
+# ============================================================================
 """
 重置模拟账户到初始状态
 
@@ -32,7 +47,7 @@ def reset_paper_account(initial_balance: float = 200.0):
     print("=" * 60)
     
     # 1. 显示当前状态
-    print("\n📊 当前状态:")
+    print("\n 当前状态:")
     balance = get_paper_balance()
     positions = get_paper_positions()
     hedge_positions = get_hedge_positions()
@@ -50,7 +65,7 @@ def reset_paper_account(initial_balance: float = 200.0):
     
     confirm = input("\n确认执行? (输入 'yes' 确认): ")
     if confirm.lower() != 'yes':
-        print("❌ 操作已取消")
+        print(" 操作已取消")
         return False
     
     # 3. 执行重置
@@ -65,7 +80,7 @@ def reset_paper_account(initial_balance: float = 200.0):
         else:
             cursor.execute("DELETE FROM paper_positions")
         deleted_positions = cursor.rowcount
-        print(f"   ✅ 已清除 {deleted_positions} 个主仓持仓")
+        print(f"    已清除 {deleted_positions} 个主仓持仓")
         
         # 清除对冲仓位
         if db_kind == "postgres":
@@ -73,7 +88,7 @@ def reset_paper_account(initial_balance: float = 200.0):
         else:
             cursor.execute("DELETE FROM hedge_positions")
         deleted_hedges = cursor.rowcount
-        print(f"   ✅ 已清除 {deleted_hedges} 个对冲仓位")
+        print(f"    已清除 {deleted_hedges} 个对冲仓位")
         
         # 重置余额
         if db_kind == "postgres":
@@ -90,7 +105,7 @@ def reset_paper_account(initial_balance: float = 200.0):
                     equity = ?, available = ?, updated_at = ?
                 WHERE id = 1
             ''', (initial_balance, initial_balance, initial_balance, current_ts))
-        print(f"   ✅ 已重置余额为 ${initial_balance:.2f}")
+        print(f"    已重置余额为 ${initial_balance:.2f}")
         
         conn.commit()
         
@@ -98,7 +113,7 @@ def reset_paper_account(initial_balance: float = 200.0):
         conn.close()
     
     # 4. 验证结果
-    print("\n📊 重置后状态:")
+    print("\n 重置后状态:")
     balance = get_paper_balance()
     positions = get_paper_positions()
     hedge_positions = get_hedge_positions()
@@ -111,7 +126,7 @@ def reset_paper_account(initial_balance: float = 200.0):
     print(f"   对冲仓数量: {len(hedge_positions) if hedge_positions else 0}")
     
     print("\n" + "=" * 60)
-    print("✅ 模拟账户已重置完成！")
+    print(" 模拟账户已重置完成！")
     print("=" * 60)
     
     return True
