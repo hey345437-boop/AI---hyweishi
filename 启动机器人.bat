@@ -56,11 +56,11 @@ echo [2/4] Python 检查通过
 
 REM 启动 Market API 服务
 echo [3/5] 启动 Market API 服务...
-if exist "market_api.py" (
-  start "Market API" cmd /k "python market_api.py"
+if exist "core\market_api.py" (
+  start "Market API" cmd /k "python core\market_api.py"
   echo       Market API: http://localhost:8000
 ) else (
-  echo [警告] 未找到 market_api.py，跳过 API 服务启动
+  echo [警告] 未找到 core\market_api.py，跳过 API 服务启动
 )
 
 REM 等待 API 初始化
