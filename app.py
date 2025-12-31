@@ -75,14 +75,14 @@ except Exception as e:
 
 # 导入项目模块
 try:
-    from db_bridge import (
+    from database.db_bridge import (
         get_engine_status, get_control_flags, 
         get_bot_config, update_bot_config, set_control_flags,
         init_db,
         get_paper_balance, get_paper_positions, get_hedge_positions,
         get_trade_stats, get_trade_history  # 交易统计
     )
-    from db_bridge import get_bootstrap_state, get_credentials_status, verify_credentials_and_snapshot
+    from database.db_bridge import get_bootstrap_state, get_credentials_status, verify_credentials_and_snapshot
 except ImportError as e:
     st.error(f"❌ 导入数据库模块失败: {str(e)[:200]}")
     st.info("请检查所有 Python 依赖是否已安装")
@@ -90,21 +90,21 @@ except ImportError as e:
 
 # 导入UI模块
 try:
-    from ui_legacy import render_main
+    from ui.ui_legacy import render_main
 except ImportError as e:
     st.error(f"❌ 导入 UI 模块失败: {str(e)[:200]}")
     st.stop()
 
 # 导入 Arena UI 模块（可选）
 try:
-    from ui_arena import render_arena_main, get_arena_mock_data
+    from ui.ui_arena import render_arena_main, get_arena_mock_data
     HAS_ARENA_UI = True
 except ImportError:
     HAS_ARENA_UI = False
 
 # ◈ 导入策略助手 UI 模块（可选）
 try:
-    from ui_strategy_builder import render_strategy_builder
+    from ui.ui_strategy_builder import render_strategy_builder
     HAS_STRATEGY_BUILDER = True
 except ImportError:
     HAS_STRATEGY_BUILDER = False
@@ -145,7 +145,7 @@ def get_env_config(env_mode):
 def discover_strategy_modules():
     """发现可用的策略模块（使用 strategy_registry）"""
     try:
-        from strategy_registry import list_all_strategies
+        from strategies.strategy_registry import list_all_strategies
         return list_all_strategies()
     except Exception:
         # 降级到硬编码列表
@@ -209,7 +209,7 @@ def main():
     
     # 打印数据库身份信息用于调试（仅在控制台）
     try:
-        from db_bridge import debug_db_identity
+        from database.db_bridge import debug_db_identity
         db_identity = debug_db_identity()
         # 仅在控制台输出，不在 UI 中显示
         import logging
