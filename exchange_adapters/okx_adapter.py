@@ -45,8 +45,8 @@ if sys.platform.startswith('win'):
 
 # 添加父目录到路径以导入风控模块
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from risk_control import RiskControlModule, RiskControlConfig
-from order_size_calculator import OrderSizeCalculator, OrderSizeResult
+from core.risk_control import RiskControlModule, RiskControlConfig
+from core.order_size_calculator import OrderSizeCalculator, OrderSizeResult
 
 from .base import ExchangeAdapter
 

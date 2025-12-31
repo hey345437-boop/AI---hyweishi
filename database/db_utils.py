@@ -18,7 +18,7 @@ import sqlite3
 import json
 import time
 from typing import Dict, List, Any, Optional
-from config import DB_PATH
+from core.config import DB_PATH
 
 # 数据库表名常量
 TABLE_BOT_CONFIG = "bot_config"

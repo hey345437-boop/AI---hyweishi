@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -35,7 +35,7 @@ from typing import Dict, Any, List, Optional, Callable
 def _get_ai_models_from_providers() -> Dict[str, Dict[str, Any]]:
     """从 ai_providers.py 获取 AI 模型定义"""
     try:
-        from ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
+        from ai.ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
         models = {}
         for provider_id, provider in AI_PROVIDERS.items():
             models[provider_id] = {
@@ -1769,7 +1769,7 @@ def render_ai_api_config_section():
     """
     # 获取模型版本信息
     try:
-        from ai_providers import MODEL_VERSION_UPDATED
+        from ai.ai_providers import MODEL_VERSION_UPDATED
         version_info = f"模型版本: {MODEL_VERSION_UPDATED}"
     except ImportError:
         version_info = ""
@@ -1791,7 +1791,7 @@ def render_ai_api_config_section():
     def get_models_for_provider(provider_id: str) -> list:
         """获取指定服务商的模型列表"""
         try:
-            from ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
+            from ai.ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
             # 处理别名映射（如 spark_lite -> spark）
             real_id = PROVIDER_ALIASES.get(provider_id, provider_id)
             provider = AI_PROVIDERS.get(real_id)
@@ -1818,7 +1818,7 @@ def render_ai_api_config_section():
     def get_default_model(provider_id: str) -> str:
         """获取默认模型"""
         try:
-            from ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
+            from ai.ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
             # 处理别名映射（如 spark_lite -> spark）
             real_id = PROVIDER_ALIASES.get(provider_id, provider_id)
             provider = AI_PROVIDERS.get(real_id)
@@ -4544,7 +4544,7 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
         
         # 尝试使用通用 AI 客户端
         try:
-            from ai_providers import UniversalAIClient
+            from ai.ai_providers import UniversalAIClient
             # 使用用户配置的模型
             client = UniversalAIClient(selected_ai, api_key, model_id=user_model if user_model else None)
             client.timeout = 60
@@ -4730,3 +4730,4 @@ if __name__ == "__main__":
     
     # 渲染
     render_arena_main(mock_view_model, mock_actions)
+

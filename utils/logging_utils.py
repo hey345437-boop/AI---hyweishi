@@ -19,7 +19,7 @@ import os
 import sys
 import io
 from logging.handlers import RotatingFileHandler
-from config import LOG_DIR, RUNNER_LOG_FILE
+from core.config import LOG_DIR, RUNNER_LOG_FILE
 
 
 # ============ Windows UTF-8 编码修复 ============

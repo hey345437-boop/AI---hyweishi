@@ -21,7 +21,7 @@
 import os
 from typing import Dict, Any, Optional
 from exchange_adapters.factory import ExchangeAdapterFactory
-from market_data_provider import MarketDataProvider
+from .market_data_provider import MarketDataProvider
 
 
 def get_exchange_adapter(config: Dict[str, Any]) -> Any:

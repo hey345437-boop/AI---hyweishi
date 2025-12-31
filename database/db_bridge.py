@@ -39,7 +39,7 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
     logger.info("PostgreSQL 支持未加载，将使用 SQLite")
 
-from db_config import get_db_config_from_env_and_secrets, PROJECT_ROOT, DATA_DIR
+from .db_config import get_db_config_from_env_and_secrets, PROJECT_ROOT, DATA_DIR
 import json
 from datetime import datetime
 

@@ -33,7 +33,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db_bridge import (
+from database.db_bridge import (
     get_paper_balance, get_paper_positions, get_hedge_positions,
     _get_connection
 )

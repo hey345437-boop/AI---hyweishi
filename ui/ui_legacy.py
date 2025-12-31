@@ -461,7 +461,7 @@ def plot_nofx_equity_curve(timestamps, equity_values, initial_equity=None):
     })
 
 # ACCESS_PASSWORD 从环境变量读取, 支持开发模式默认密码
-from env_validator import EnvironmentValidator
+from utils.env_validator import EnvironmentValidator
 
 # 验证访问密码配置
 _pwd_valid, _pwd_warning, ACCESS_PASSWORD = EnvironmentValidator.validate_access_password()

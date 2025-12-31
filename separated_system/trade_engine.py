@@ -108,13 +108,13 @@ def get_due_timeframes(current_minute: int, timeframes: List[str]) -> List[str]:
     
     return due_tfs
 
-from config import (
+from core.config import (
     OKX_API_KEY, OKX_API_SECRET, OKX_API_PASSPHRASE,
     OKX_MARKET_TYPE, OKX_TD_MODE, OKX_SANDBOX,
     TIMEFRAME, SCAN_INTERVAL_SEC,
     EXIT_ON_FATAL, MAX_CYCLE_ERRORS
 )
-from db_bridge import (
+from database.db_bridge import (
     init_db, get_engine_status, get_control_flags,
     get_bot_config, set_control_flags, update_engine_status,
     insert_performance_metrics, upsert_ohlcv, insert_signal_event,
@@ -133,28 +133,28 @@ from db_bridge import (
     # WebSocket 状态同步
     update_ws_status
 )
-from logging_utils import setup_logger, get_logger, render_scan_block, render_idle_block, render_risk_check
+from utils.logging_utils import setup_logger, get_logger, render_scan_block, render_idle_block, render_risk_check
 from exchange_adapters.factory import ExchangeAdapterFactory
-from market_data_provider import MarketDataProvider
+from core.market_data_provider import MarketDataProvider
 
 # WebSocket 数据源支持
 try:
-    from market_data_provider import WebSocketMarketDataProvider, create_hybrid_market_data_provider
-    from okx_websocket import is_ws_available, start_ws_client, stop_ws_client
+    from core.market_data_provider import WebSocketMarketDataProvider, create_hybrid_market_data_provider
+    from exchange.okx_websocket import is_ws_available, start_ws_client, stop_ws_client
     WS_AVAILABLE = is_ws_available()
 except ImportError:
     WS_AVAILABLE = False
     WebSocketMarketDataProvider = None
 
 # P1修复: 导入风控模块
-from risk_control import RiskControlModule, RiskControlConfig
+from core.risk_control import RiskControlModule, RiskControlConfig
 
 # 导入对冲管理器
-import db_bridge as db_bridge_module
+import database.db_bridge as db_bridge_module
 from separated_system.hedge_manager import HedgeManager
 
 # 导入K线时间处理工具
-from candle_time_utils import (
+from utils.candle_time_utils import (
     get_closed_candles,
     get_latest_closed_candle,
     is_candle_closed,
@@ -167,7 +167,7 @@ from candle_time_utils import (
 )
 
 # 导入策略注册表（从UI选择的策略）
-from strategy_registry import (
+from strategies.strategy_registry import (
     get_strategy_registry,
     validate_and_fallback_strategy
 )
