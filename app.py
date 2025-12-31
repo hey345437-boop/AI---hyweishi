@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -58,7 +58,7 @@ except ImportError:
 # ============ 启动前检查（简化版）============
 # 只检查关键依赖，配置通过前端 UI 输入
 try:
-    from startup_validator import StartupValidator
+    from utils.startup_validator import StartupValidator
     # 只检查 Python 包，跳过配置和数据库检查
     pkg_ok, missing_req, missing_opt = StartupValidator.check_packages(verbose=False)
     if not pkg_ok:
@@ -482,3 +482,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

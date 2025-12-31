@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -28,7 +28,7 @@ def _load_saved_credentials():
     优先级：配置文件 > 环境变量
     """
     try:
-        from config_manager import get_config_manager
+        from core.config_manager import get_config_manager
         manager = get_config_manager()
         creds = manager.load_credentials()
         
@@ -163,7 +163,7 @@ def get_market_data_credentials():
     """
     # 尝试使用配置管理器
     try:
-        from config_manager import get_config_manager
+        from core.config_manager import get_config_manager
         return get_config_manager().get_market_credentials()
     except ImportError:
         pass
@@ -192,7 +192,7 @@ def get_trading_credentials():
     """
     # 尝试使用配置管理器
     try:
-        from config_manager import get_config_manager
+        from core.config_manager import get_config_manager
         return get_config_manager().get_trade_credentials()
     except ImportError:
         pass
@@ -203,3 +203,4 @@ def get_trading_credentials():
         os.getenv("OKX_API_SECRET", ""),
         os.getenv("OKX_API_PASSPHRASE", "")
     )
+

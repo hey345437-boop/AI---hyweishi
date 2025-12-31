@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -1011,10 +1011,10 @@ def load_decrypted_credentials(db_config: Optional[Dict[str, Any]] = None) -> Di
     result = {'okx_api_key': key, 'okx_api_secret': None, 'okx_api_passphrase': None}
     try:
         if secret_ct and secret_iv:
-            from crypto_utils import decrypt_text
+            from utils.crypto_utils import decrypt_text
             result['okx_api_secret'] = decrypt_text(secret_ct, secret_iv)
         if pass_ct and pass_iv:
-            from crypto_utils import decrypt_text
+            from utils.crypto_utils import decrypt_text
             result['okx_api_passphrase'] = decrypt_text(pass_ct, pass_iv)
     except Exception:
         # 解密失败时返回 None 并记录错误在调用端
@@ -1074,7 +1074,7 @@ def update_bot_config(db_config: Optional[Dict[str, Any]] = None, **fields) -> N
     # 处理凭证加密：若用户传入 okx_api_secret 或 okx_api_passphrase，则使用 crypto_utils 加密并写入 cipher 字段
     try:
         if 'okx_api_secret' in filtered_fields or 'okx_api_passphrase' in filtered_fields:
-            from crypto_utils import encrypt_text
+            from utils.crypto_utils import encrypt_text
             # 准备更新项
             secret = filtered_fields.pop('okx_api_secret', None)
             passphrase = filtered_fields.pop('okx_api_passphrase', None)
@@ -2590,7 +2590,7 @@ def execute_immediate_flatten(
         # 3. 实盘模式：先调用交易所 API 平仓
         if run_mode == 'live' and exchange_adapter is not None:
             try:
-                from close_position import close_all_positions
+                from core.close_position import close_all_positions
                 api_result = close_all_positions(exchange_adapter)
                 if not api_result.success:
                     result['errors'].extend(api_result.errors)
@@ -2726,3 +2726,4 @@ def execute_immediate_flatten(
         logger.error(f"[即时平仓] {error_msg}")
     
     return result
+

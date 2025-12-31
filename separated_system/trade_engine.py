@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 异步市场数据获取器
 try:
-    from async_market_fetcher import fetch_batch_ohlcv_sync, FetchTask
+    from core.async_market_fetcher import fetch_batch_ohlcv_sync, FetchTask
     ASYNC_FETCHER_AVAILABLE = True
 except ImportError:
     ASYNC_FETCHER_AVAILABLE = False
@@ -3356,3 +3356,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

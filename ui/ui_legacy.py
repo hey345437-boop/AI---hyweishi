@@ -57,7 +57,7 @@ except ImportError:
 # 统一使用 run_mode.py 中的定义
 # 只保留两种模式: 实盘测试(读取实盘数据但不下单)和实盘(真实交易)
 try:
-    from run_mode import (
+    from core.run_mode import (
         RunMode, run_mode_to_display, run_mode_to_db, db_to_run_mode,
         RUN_MODE_DISPLAY, RUN_MODE_TO_DB, DB_TO_RUN_MODE
     )
@@ -1524,7 +1524,7 @@ def render_sidebar(view_model, actions):
         
         # 导入配置管理器
         try:
-            from config_manager import get_config_manager, save_api_credentials, get_api_status, mask_key
+            from core.config_manager import get_config_manager, save_api_credentials, get_api_status, mask_key
             config_mgr = get_config_manager()
             api_status = get_api_status()
             HAS_CONFIG_MANAGER = True
@@ -3388,4 +3388,6 @@ def render_main(view_model, actions):
     
     # 渲染主仪表盘
     render_dashboard(view_model, actions)
+
+
 

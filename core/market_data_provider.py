@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -1093,7 +1093,7 @@ def create_market_data_exchange(use_market_key: bool = True):
     trade_passphrase = ""
     
     try:
-        from config_manager import get_config_manager
+        from core.config_manager import get_config_manager
         config_mgr = get_config_manager()
         creds = config_mgr.load_credentials()  # 修正方法名
         
@@ -1549,3 +1549,4 @@ def create_hybrid_market_data_provider(
         logger.info("[Hybrid] WebSocket 数据源已创建")
     
     return rest_provider, ws_provider
+
