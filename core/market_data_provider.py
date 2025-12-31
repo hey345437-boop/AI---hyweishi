@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # 双通道K线数据支持
 try:
-    from dual_channel_ohlcv import (
+    from dual_channel.dual_channel_ohlcv import (
         DualChannelOHLCV, 
         IncrementalFetcher, 
         get_incremental_fetcher,
@@ -1207,7 +1207,7 @@ def create_market_data_provider_with_dedicated_key(
 
 # WebSocket 客户端导入
 try:
-    from okx_websocket import (
+    from exchange.okx_websocket import (
         OKXWebSocketClient, 
         get_ws_client, 
         start_ws_client, 
