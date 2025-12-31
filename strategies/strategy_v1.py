@@ -20,7 +20,7 @@ import pandas as pd
 import numpy as np
 
 # 导入 Numba 加速函数（从 strategy_v2 共享）
-from strategy_v2 import _ema_numba, _rma_numba, _bcwsma_numba, _wilder_smoothing_numba
+from strategies.strategy_v2 import _ema_numba, _rma_numba, _bcwsma_numba, _wilder_smoothing_numba
 
 class TradingStrategyV1:
     """

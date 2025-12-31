@@ -104,7 +104,7 @@ class ArenaDataInterface:
     def _get_config_manager():
         """获取配置管理器"""
         try:
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_config_manager import get_ai_config_manager
             return get_ai_config_manager()
         except ImportError:
             return None
@@ -149,7 +149,7 @@ class ArenaDataInterface:
         """
         # 真实 API Key 验证
         try:
-            from ai_api_validator import quick_validate_key_format, verify_api_key_sync
+            from ai.ai_api_validator import quick_validate_key_format, verify_api_key_sync
             
             # 1. 快速格式检查
             format_ok, format_msg = quick_validate_key_format(ai_id, api_key)
@@ -399,8 +399,8 @@ def get_arena_real_data() -> Dict[str, Dict[str, Any]]:
     
     # 尝试从数据库获取统计数据
     try:
-        from ai_db_manager import get_ai_db_manager
-        from ai_indicators import get_data_source
+        from ai.ai_db_manager import get_ai_db_manager
+        from ai.ai_indicators import get_data_source
         
         db = get_ai_db_manager()
         all_stats = db.get_all_stats()
@@ -1236,7 +1236,7 @@ def _render_trade_history_popup(agent_name: str):
     显示该 AI 的历史开仓/平仓记录，包含时间
     """
     try:
-        from ai_db_manager import get_ai_db_manager
+        from ai.ai_db_manager import get_ai_db_manager
         db = get_ai_db_manager()
         trades = db.get_trade_history(agent_name, limit=20)
         
@@ -1327,7 +1327,7 @@ def render_arena_card(name: str, data: Dict[str, Any]):
     ai_takeover_live = st.session_state.get('ai_takeover_live', False)
     # 优先使用实际调度器状态，而不是 session_state（页面刷新后 session_state 会丢失）
     try:
-        from arena_scheduler import is_scheduler_running
+        from ai.arena_scheduler import is_scheduler_running
         scheduler_running = is_scheduler_running()
     except ImportError:
         scheduler_running = st.session_state.get('arena_scheduler_running', False)
@@ -1485,7 +1485,7 @@ def render_ai_takeover_section():
     """
     # 导入调度器模块
     try:
-        from arena_scheduler import (
+        from ai.arena_scheduler import (
             start_background_scheduler,
             stop_background_scheduler,
             is_scheduler_running,
@@ -1537,7 +1537,7 @@ def render_ai_takeover_section():
     if default_selected is None:
         # 尝试从数据库恢复
         try:
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_config_manager import get_ai_config_manager
             config_mgr = get_ai_config_manager()
             state = config_mgr.get_scheduler_state()
             saved_agents = state.get('agents', [])
@@ -1654,7 +1654,7 @@ def render_ai_takeover_section():
             if has_scheduler:
                 # 先清除持久化状态（确保不会自动恢复）
                 try:
-                    from ai_config_manager import get_ai_config_manager
+                    from ai.ai_config_manager import get_ai_config_manager
                     config_mgr = get_ai_config_manager()
                     config_mgr.clear_scheduler_state()
                 except Exception as e:
@@ -1690,7 +1690,7 @@ def render_ai_takeover_section():
             if not user_prompt:
                 # 如果没有自定义 Prompt，使用当前预设
                 try:
-                    from ai_config_manager import PROMPT_PRESETS
+                    from ai.ai_config_manager import PROMPT_PRESETS
                     preset_id = st.session_state.get('ai_preset_id', 'balanced')
                     if preset_id in PROMPT_PRESETS:
                         user_prompt = PROMPT_PRESETS[preset_id].prompt
@@ -1726,7 +1726,7 @@ def render_ai_takeover_section():
                 
                 # 持久化：保存调度器状态（UI 重启后可恢复）
                 try:
-                    from ai_config_manager import get_ai_config_manager
+                    from ai.ai_config_manager import get_ai_config_manager
                     config_mgr = get_ai_config_manager()
                     config_mgr.save_scheduler_state(
                         enabled=True,
@@ -1957,7 +1957,7 @@ def render_ai_api_config_section():
             )
             
             # 显示 API Key 格式提示
-            from ai_api_validator import API_KEY_PATTERNS
+            from ai.ai_api_validator import API_KEY_PATTERNS
             pattern_info = API_KEY_PATTERNS.get(selected_ai_id)
             if pattern_info and pattern_info[0]:
                 st.caption(f"格式: {pattern_info[0]}xxx...")
@@ -2006,7 +2006,7 @@ def render_trading_pool_section(actions: Dict):
     
     # 导入符号处理工具
     try:
-        from symbol_utils import normalize_symbol, parse_symbol_input
+        from utils.symbol_utils import normalize_symbol, parse_symbol_input
     except ImportError:
         st.error("无法加载 symbol_utils")
         return
@@ -2060,7 +2060,7 @@ def render_command_center():
     """
     # 导入配置管理器
     try:
-        from ai_config_manager import get_ai_config_manager, PROMPT_PRESETS
+        from ai.ai_config_manager import get_ai_config_manager, PROMPT_PRESETS
         config_mgr = get_ai_config_manager()
         has_config_mgr = True
     except ImportError:
@@ -2486,7 +2486,7 @@ def render_champion_view(arena_data: Dict[str, Dict]):
     
     # 检查调度器是否运行中
     try:
-        from arena_scheduler import is_scheduler_running
+        from ai.arena_scheduler import is_scheduler_running
         scheduler_running = is_scheduler_running()
     except ImportError:
         scheduler_running = False
@@ -2607,7 +2607,7 @@ def _get_real_ai_stats(agent_name: str) -> Dict[str, Any]:
     
     # 回退到直接查询数据库
     try:
-        from ai_db_manager import get_ai_db_manager
+        from ai.ai_db_manager import get_ai_db_manager
         db = get_ai_db_manager()
         stats = db.get_agent_stats(agent_name)
         if stats:
@@ -2640,7 +2640,7 @@ def _get_real_equity_curve(agent_name: str):
     initial_balance = 10000  # 虚拟初始资金
     
     try:
-        from ai_db_manager import get_ai_db_manager
+        from ai.ai_db_manager import get_ai_db_manager
         db = get_ai_db_manager()
         
         # 获取已平仓的交易记录
@@ -3047,7 +3047,7 @@ def _generate_ai_signal_markers(candle_data: List[Dict], arena_data: Dict, selec
     BEIJING_OFFSET_SEC = 8 * 3600
     
     try:
-        from ai_db_manager import get_ai_db_manager, get_db_connection
+        from ai.ai_db_manager import get_ai_db_manager, get_db_connection
         import threading
         
         db = get_ai_db_manager()
@@ -3196,7 +3196,7 @@ def _render_recent_decisions_fragment():
     显示最近的 AI 决策记录列表
     """
     try:
-        from ai_db_manager import get_ai_db_manager
+        from ai.ai_db_manager import get_ai_db_manager
         from datetime import datetime, timezone, timedelta
         
         # 北京时区 (UTC+8)
@@ -3260,7 +3260,7 @@ def _render_ai_speech_fragment():
     按轮次整合显示所有 AI 的分析，每轮用 expander 折叠
     """
     try:
-        from ai_db_manager import get_ai_db_manager
+        from ai.ai_db_manager import get_ai_db_manager
         from datetime import datetime, timezone, timedelta
         
         # 北京时区 (UTC+8)
@@ -3424,7 +3424,7 @@ def _render_arena_status_log():
     显示简单的 AI 执行状态（是否返回决策、是否下单）
     """
     try:
-        from ai_db_manager import get_ai_db_manager
+        from ai.ai_db_manager import get_ai_db_manager
         from datetime import datetime, timedelta
         
         db = get_ai_db_manager()
@@ -3601,8 +3601,8 @@ def _render_ai_positions_fragment():
     st.markdown("### 🎮 AI 虚拟持仓（竞技场）")
     
     try:
-        from ai_db_manager import get_ai_db_manager
-        from ai_indicators import get_data_source
+        from ai.ai_db_manager import get_ai_db_manager
+        from ai.ai_indicators import get_data_source
         
         db = get_ai_db_manager()
         data_source = get_data_source()
@@ -3698,8 +3698,8 @@ def _restore_scheduler_if_needed():
         return
     
     try:
-        from ai_config_manager import get_ai_config_manager
-        from arena_scheduler import is_scheduler_running, start_background_scheduler, get_scheduler, stop_scheduler
+        from ai.ai_config_manager import get_ai_config_manager
+        from ai.arena_scheduler import is_scheduler_running, start_background_scheduler, get_scheduler, stop_scheduler
         
         # 从数据库读取持久化状态
         config_mgr = get_ai_config_manager()
@@ -4245,7 +4245,7 @@ def _get_available_ais_for_advisor():
     """获取可用于 AI 顾问的 AI 列表（包含用户配置的模型）"""
     try:
         # 从配置管理器获取已配置的 AI
-        from ai_config_manager import get_ai_config_manager
+        from ai.ai_config_manager import get_ai_config_manager
         config_mgr = get_ai_config_manager()
         configs = config_mgr.get_all_ai_api_configs()
         
@@ -4455,7 +4455,7 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
     """
     try:
         # 1. 获取市场数据（增加到 500 根 K 线）
-        from ai_indicators import get_data_source, IndicatorCalculator
+        from ai.ai_indicators import get_data_source, IndicatorCalculator
         
         data_source = get_data_source()
         calculator = IndicatorCalculator()
@@ -4481,7 +4481,7 @@ def _perform_advisor_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
         # 2. 获取用户选择的 AI
         selected_ai = st.session_state.get('advisor_selected_ai', 'deepseek')
         
-        from ai_config_manager import AIConfigManager
+        from ai.ai_config_manager import AIConfigManager
         config_mgr = AIConfigManager()
         ai_configs = config_mgr.get_all_ai_api_configs()
         
@@ -4637,7 +4637,7 @@ def _perform_ai_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
     AI 交易员分析（用于自动交易，使用严格风控）
     """
     try:
-        from ai_indicators import get_data_source, IndicatorCalculator
+        from ai.ai_indicators import get_data_source, IndicatorCalculator
         
         data_source = get_data_source()
         calculator = IndicatorCalculator()
@@ -4655,7 +4655,7 @@ def _perform_ai_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
         # 获取用户选择的 AI
         selected_ai = st.session_state.get('advisor_selected_ai', 'deepseek')
         
-        from ai_config_manager import AIConfigManager
+        from ai.ai_config_manager import AIConfigManager
         config_mgr = AIConfigManager()
         ai_configs = config_mgr.get_all_ai_api_configs()
         
@@ -4730,4 +4730,5 @@ if __name__ == "__main__":
     
     # 渲染
     render_arena_main(mock_view_model, mock_actions)
+
 

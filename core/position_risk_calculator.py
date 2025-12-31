@@ -26,7 +26,7 @@
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
-from run_mode import RunMode, get_run_mode
+from core.run_mode import RunMode, get_run_mode
 
 logger = logging.getLogger(__name__)
 

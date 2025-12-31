@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -22,7 +22,7 @@ from datetime import datetime
 import plotly.graph_objects as go
 
 # å¯¼å¥é¡¹ç®æ¨¡å
-from db_bridge import (
+from database.db_bridge import (
     get_engine_status, get_control_flags, get_bot_config,
     get_recent_performance_metrics, init_db,
     load_ohlcv, load_signals,
@@ -256,7 +256,7 @@ def main():
     
     # å¦æç¨æ·éæ©äºä¸åçæ¨¡å¼ï¼æ´æ°å°DB
     if run_mode_map_ui_to_db[selected_run_mode] != current_run_mode_db:
-        from db_bridge import update_bot_config, set_control_flags
+        from database.db_bridge import update_bot_config, set_control_flags
         update_bot_config(run_mode=run_mode_map_ui_to_db[selected_run_mode])
         set_control_flags(reload_config=1)
         st.rerun()
@@ -396,7 +396,7 @@ def main():
             # æ°å¢ï¼æ°æ®ä¸ºç©ºæ¶èªå¨æå
             st.warning(f"ð {default_symbol} çKçº¿ä¸ºç©ºï¼æ­£å¨æå...")
             try:
-                from db_bridge import fetch_and_cache_ohlcv
+                from database.db_bridge import fetch_and_cache_ohlcv
                 result = fetch_and_cache_ohlcv(default_symbol, timeframe, limit=200)
                 if result.get('ok'):
                     st.success(f"â?æåæå {result.get('rows', 0)} æ¡Kçº?)

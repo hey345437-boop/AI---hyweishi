@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -297,7 +297,7 @@ def _get_available_ais() -> List[Dict[str, Any]]:
     try:
         # 优先使用新的 ai_providers 模块
         try:
-            from ai_providers import get_configured_providers, AI_PROVIDERS
+            from ai.ai_providers import get_configured_providers, AI_PROVIDERS
             
             configured = get_configured_providers()
             available = []
@@ -319,7 +319,7 @@ def _get_available_ais() -> List[Dict[str, Any]]:
             pass
         
         # 回退到旧方法
-        from ai_config_manager import get_ai_config_manager
+        from ai.ai_config_manager import get_ai_config_manager
         config_mgr = get_ai_config_manager()
         configs = config_mgr.get_all_ai_api_configs()
         
@@ -1162,7 +1162,7 @@ def _evaluate_strategy():
     
     with st.spinner(f"正在使用 {ai_id} 评估策略..."):
         try:
-            from ai_providers import UniversalAIClient, get_provider
+            from ai.ai_providers import UniversalAIClient, get_provider
             
             # 检测是否是高级策略
             is_advanced = 'AdvancedStrategyBase' in code
@@ -1267,7 +1267,7 @@ def _simple_evaluate(code: str) -> str:
 def _auto_validate(code: str) -> dict:
     """自动验证代码（生成/转换后调用）"""
     try:
-        from strategy_validator import StrategyValidator
+        from strategies.strategy_validator import StrategyValidator
         validator = StrategyValidator()
         return validator.validate(code)
     except ImportError:
@@ -1306,7 +1306,7 @@ def _generate_from_natural_language(description: str):
     
     with st.spinner("正在生成策略代码..."):
         try:
-            from strategy_generator import StrategyGenerator
+            from strategies.strategy_generator import StrategyGenerator
             generator = StrategyGenerator()
             
             # 如果有选择的 AI，使用该 AI
@@ -1339,7 +1339,7 @@ def _convert_pine_script(pine_code: str):
     """转换 Pine Script 为 Python"""
     with st.spinner("正在转换..."):
         try:
-            from pine_converter import PineConverter
+            from strategies.pine_converter import PineConverter
             converter = PineConverter()
             result = converter.convert(pine_code)
             
@@ -1365,7 +1365,7 @@ def _validate_python_code(code: str):
     """验证 Python 代码"""
     with st.spinner("正在验证..."):
         try:
-            from strategy_validator import StrategyValidator
+            from strategies.strategy_validator import StrategyValidator
             validator = StrategyValidator()
             result = validator.validate(code)
             
@@ -1390,7 +1390,7 @@ def _auto_convert_code():
     
     with st.spinner("正在转换..."):
         try:
-            from strategy_validator import StrategyValidator
+            from strategies.strategy_validator import StrategyValidator
             validator = StrategyValidator()
             result = validator.convert_to_engine_format(code)
             
@@ -1512,7 +1512,7 @@ def _save_strategy(strategy_id: str, display_name: str, description: str):
         return
     
     try:
-        from strategy_registry import save_new_strategy
+        from strategies.strategy_registry import save_new_strategy
         
         # 获取策略配置（如果有）
         strategy_config = st.session_state.get('strategy_config', {})
@@ -1559,7 +1559,7 @@ def _render_strategy_manager():
     st.markdown("### (◕‿◕) 已保存的自定义策略")
     
     try:
-        from strategy_registry import list_user_strategies, delete_strategy
+        from strategies.strategy_registry import list_user_strategies, delete_strategy
         import os
         
         user_strategies = list_user_strategies()
@@ -1855,7 +1855,7 @@ def _get_backtest_strategy_options() -> Dict[str, str]:
     options = {}
     
     try:
-        from strategy_registry import list_all_strategies, get_strategy_registry
+        from strategies.strategy_registry import list_all_strategies, get_strategy_registry
         
         strategies = list_all_strategies()
         registry = get_strategy_registry()
@@ -1938,7 +1938,7 @@ def _run_backtest(
         status_text.text(message)
     
     try:
-        from backtest_engine import get_backtest_engine, BacktestConfig
+        from core.backtest_engine import get_backtest_engine, BacktestConfig
         
         # 重新创建引擎实例（确保代理配置最新）
         import backtest_engine
@@ -2308,3 +2308,4 @@ def _render_trades_table(trades: List):
         mime="text/csv",
         key="download_trades"
     )
+

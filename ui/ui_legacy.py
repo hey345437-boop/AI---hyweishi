@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # ============================================================================
 #
 #    _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
@@ -876,7 +876,7 @@ def render_login(view_model, actions):
 
 def _render_advanced_strategy_config(strategy_id: str, actions):
     """渲染高级策略配置面板（动态止盈止损、时间过滤等）"""
-    from strategy_registry import get_strategy_risk_config, get_strategy_registry
+    from strategies.strategy_registry import get_strategy_risk_config, get_strategy_registry
     
     # 获取保存的配置
     saved_config = get_strategy_risk_config(strategy_id) or {}
@@ -1110,9 +1110,9 @@ def _render_advanced_strategy_config(strategy_id: str, actions):
                     st.session_state[config_key] = new_config
                     
                     # 刷新策略注册表
-                    from strategy_registry import get_strategy_registry
+                    from strategies.strategy_registry import get_strategy_registry
                     # 强制重新加载
-                    import strategy_registry
+                    import strategies.strategy_registry as strategy_registry
                     strategy_registry._registry_instance = None
                     get_strategy_registry()
                     
@@ -1720,7 +1720,7 @@ def render_sidebar(view_model, actions):
         """, unsafe_allow_html=True)
         
         # 【A】修复: 使用 robust symbol 规范化函数
-        from symbol_utils import normalize_symbol, parse_symbol_input
+        from utils.symbol_utils import normalize_symbol, parse_symbol_input
         
         # 设置默认交易池(使用规范化格式)
         default_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
@@ -1785,7 +1785,7 @@ def render_sidebar(view_model, actions):
         
         # 判断当前策略类型，并获取策略默认参数
         try:
-            from strategy_registry import is_custom_strategy, get_strategy_default_params
+            from strategies.strategy_registry import is_custom_strategy, get_strategy_default_params
             current_strategy_id = st.session_state.get('selected_strategy_id', 'strategy_v2')
             is_custom = is_custom_strategy(current_strategy_id)
             
@@ -1950,7 +1950,7 @@ def render_sidebar(view_model, actions):
         # ============ 高级策略配置面板 ============
         # 检查是否是高级策略（支持动态止盈止损）
         try:
-            from strategy_registry import is_advanced_strategy, get_strategy_risk_config
+            from strategies.strategy_registry import is_advanced_strategy, get_strategy_risk_config
             is_advanced = is_advanced_strategy(current_strategy_id)
         except ImportError:
             is_advanced = False
@@ -2019,7 +2019,7 @@ def render_sidebar(view_model, actions):
             st.caption(" 实时信号策略推荐，毫秒级推送，适合突破/动量策略")
             # 显示 WebSocket 连接状态
             try:
-                from db_bridge import get_ws_status
+                from database.db_bridge import get_ws_status
                 ws_status = get_ws_status()
                 if ws_status and ws_status.get('connected'):
                     st.success(" WebSocket 已连接")
@@ -2417,7 +2417,7 @@ def _render_kline_chart_core(selected_symbol, selected_tf, fetch_btn, api_status
     if not markers and ohlcv_data and not is_auto_refresh:
         try:
             # 动态加载策略模块
-            from strategy_registry import get_strategy_registry
+            from strategies.strategy_registry import get_strategy_registry
             registry = get_strategy_registry()
             strategy_class = registry.get_strategy_class(current_strategy_id)
             
@@ -2989,7 +2989,7 @@ def render_dashboard(view_model, actions):
                     
                     # 即时平仓：直接执行，不等待扫描周期
                     try:
-                        from db_bridge import execute_immediate_flatten, get_bot_config
+                        from database.db_bridge import execute_immediate_flatten, get_bot_config
                         
                         # 获取运行模式
                         bot_config = get_bot_config()
@@ -3167,7 +3167,7 @@ def render_main(view_model, actions):
         if db_run_mode:
             st.session_state.env_mode = RUN_MODE_DB_TO_UI.get(db_run_mode, '🛰实盘测试')
         # selected strategy: validate and fallback
-        from strategy_registry import validate_and_fallback_strategy
+        from strategies.strategy_registry import validate_and_fallback_strategy
         db_strategy_id = bootstrap.get('selected_strategy_id')
         valid_strategy_id = validate_and_fallback_strategy(db_strategy_id)
         st.session_state.selected_strategy_id = valid_strategy_id
@@ -3388,3 +3388,4 @@ def render_main(view_model, actions):
     
     # 渲染主仪表盘
     render_dashboard(view_model, actions)
+

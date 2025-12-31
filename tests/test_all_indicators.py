@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-from ai_indicators import calc_ema, calc_rsi, calc_macd, calc_atr, calc_boll, calc_kdj, calc_ma, calc_obv, calc_vwap
+from ai.ai_indicators import calc_ema, calc_rsi, calc_macd, calc_atr, calc_boll, calc_kdj, calc_ma, calc_obv, calc_vwap
 
 # 生成测试数据
 np.random.seed(42)
