@@ -29,7 +29,7 @@ import sys
 sys.path.insert(0, '.')
 
 import sqlite3
-from ai_db_manager import ARENA_DB_PATH
+from ai.ai_db_manager import ARENA_DB_PATH
 
 def reset_arena():
     print("=" * 60)

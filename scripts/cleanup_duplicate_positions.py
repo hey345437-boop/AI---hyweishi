@@ -24,7 +24,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ai_db_manager import get_ai_db_manager
+from ai.ai_db_manager import get_ai_db_manager
 
 def main():
     print("=" * 60)

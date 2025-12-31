@@ -24,7 +24,7 @@ import sys
 sys.path.insert(0, '.')
 
 import sqlite3
-from ai_db_manager import ARENA_DB_PATH
+from ai.ai_db_manager import ARENA_DB_PATH
 
 def fix_pnl():
     conn = sqlite3.connect(ARENA_DB_PATH)
