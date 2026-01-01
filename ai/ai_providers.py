@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -755,7 +755,7 @@ def get_configured_providers() -> Dict[str, Dict[str, Any]]:
         字典，key 为服务商 ID，value 包含 provider、api_key、model、verified 等信息
     """
     try:
-        from ai_config_manager import get_ai_config_manager
+        from ai.ai_config_manager import get_ai_config_manager
         config_mgr = get_ai_config_manager()
         all_configs = config_mgr.get_all_ai_api_configs()
         

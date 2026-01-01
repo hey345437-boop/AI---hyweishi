@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -185,26 +185,23 @@ class ArenaScheduler:
     
     def _fetch_sentiment(self) -> Optional[Dict[str, Any]]:
         """
-        获取市场情绪数据 (Fear & Greed Index)
-        
-        返回:
-            {'value': 45, 'classification': 'Fear', 'timestamp': ...}
+        获取市场情绪数据 (Fear & Greed Index + 新闻分析)
         """
         try:
-            import requests
-            response = requests.get(
-                "https://api.alternative.me/fng/",
-                timeout=5
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data and 'data' in data and len(data['data']) > 0:
-                    fng = data['data'][0]
-                    return {
-                        'value': fng.get('value', 'N/A'),
-                        'classification': fng.get('value_classification', '未知'),
-                        'timestamp': fng.get('timestamp', '')
-                    }
+            from sentiment import get_market_impact
+            impact = get_market_impact()
+            
+            # 返回兼容旧格式 + 新增字段
+            fg = impact.get("fear_greed", {})
+            return {
+                'value': fg.get('value', 'N/A') if fg else 'N/A',
+                'classification': fg.get('classification', '未知') if fg else '未知',
+                'timestamp': fg.get('timestamp', '') if fg else '',
+                'combined_score': impact.get('combined_score', 0),
+                'combined_bias': impact.get('combined_bias', 'neutral'),
+                'key_events': impact.get('news_sentiment', {}).get('key_events', []),
+                'suggestion': impact.get('news_sentiment', {}).get('suggestion', '')
+            }
         except Exception as e:
             logger.debug(f"[Arena] 获取情绪数据失败: {e}")
         return None

@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 #
@@ -47,6 +47,15 @@ BUILTIN_STRATEGIES = {
         'class_name': 'TradingStrategy',
         'file_path': os.path.join(os.path.dirname(__file__), 'strategy_v2.py'),
         'order': 1
+    },
+    'strategy_v3': {
+        'strategy_id': 'strategy_v3',
+        'display_name': '⚡ 实时策略 v3',
+        'version': '3.0',
+        'description': '实时信号策略：布林带突破 + ADX趋势过滤，不等待K线收盘',
+        'class_name': 'RealtimeStrategy',
+        'file_path': os.path.join(os.path.dirname(__file__), 'strategy_v3_realtime', '__init__.py'),
+        'order': 2
     }
 }
 

@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 # ============================================================================
@@ -246,6 +246,29 @@ def render_strategy_builder(view_model: Dict[str, Any], actions: Dict[str, Any])
     # 注入 CSS 样式
     st.markdown(STRATEGY_BUILDER_STYLES, unsafe_allow_html=True)
     
+    # 侧边栏 - 返回按钮
+    with st.sidebar:
+        st.markdown("""
+        <div style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px 8px;
+            margin-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        ">
+            <div style="font-size: 18px; font-weight: 600; color: #ff6b9d;">◈ 策略助手</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("← 返回主界面", key="sidebar_exit_builder", use_container_width=True, type="primary"):
+            st.session_state.strategy_builder_mode = False
+            st.session_state.arena_mode = False  # 确保也退出 arena 模式
+            st.rerun()
+        
+        st.divider()
+        st.caption("(・ω・) 在这里创建和管理你的交易策略")
+    
     # 页面标题
     st.markdown("""
     <div class="strategy-builder-header">
@@ -254,13 +277,11 @@ def render_strategy_builder(view_model: Dict[str, Any], actions: Dict[str, Any])
     </div>
     """, unsafe_allow_html=True)
     
-    # 返回按钮（放在标题下方）
-    if st.button("← 返回主界面", key="back_to_main"):
-        st.session_state.strategy_builder_mode = False
-        st.rerun()
-    
     # AI 选择器
     _render_ai_selector()
+    
+    # 信号类型说明（实时信号 vs 收盘信号）
+    _render_signal_type_explanation()
     
     st.markdown("---")
     
@@ -439,6 +460,61 @@ def _render_ai_selector():
                 st.success("✓ 已验证")
             else:
                 st.caption("未验证")
+
+
+def _render_signal_type_explanation():
+    """渲染信号类型说明（实时信号 vs 收盘信号）"""
+    with st.expander("(・ω・) 信号类型说明：实时信号 vs 收盘信号", expanded=False):
+        st.markdown("""
+        <div style="
+            background: linear-gradient(145deg, rgba(26, 26, 46, 0.9), rgba(15, 15, 26, 0.95));
+            border: 1px solid rgba(255, 107, 157, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+        ">
+        
+        **策略信号分为两种类型，需要配合不同的数据源模式使用：**
+        
+        ---
+        
+        **📊 收盘信号策略（推荐新手）**
+        
+        | 特点 | 说明 |
+        |------|------|
+        | 触发时机 | K线收盘后（如每分钟00秒） |
+        | 数据源 | REST 轮询模式 |
+        | 适用策略 | 均线交叉、MACD、RSI 等趋势策略 |
+        | 优点 | 信号稳定，不会因价格波动反复触发 |
+        | 缺点 | 有一定延迟（最多1根K线时间） |
+        
+        **示例**：EMA12 上穿 EMA26 → 等K线收盘确认后再开仓
+        
+        ---
+        
+        **⚡ 实时信号策略（进阶用户）**
+        
+        | 特点 | 说明 |
+        |------|------|
+        | 触发时机 | 价格变动时立即触发 |
+        | 数据源 | WebSocket 实时推送 |
+        | 适用策略 | 突破策略、动量策略、网格策略 |
+        | 优点 | 毫秒级响应，抓住瞬间机会 |
+        | 缺点 | 可能出现假突破，需要更严格的过滤条件 |
+        
+        **示例**：价格突破布林带上轨 → 立即开仓
+        
+        ---
+        
+        **🔧 如何配置？**
+        
+        1. 在主界面侧边栏找到「数据源」选项
+        2. 收盘信号策略 → 选择 **REST 轮询**
+        3. 实时信号策略 → 选择 **WebSocket**
+        
+        **💡 提示**：系统会根据策略类型自动推荐数据源模式
+        
+        </div>
+        """, unsafe_allow_html=True)
 
 
 def _render_natural_language_tab():

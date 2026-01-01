@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -32,7 +32,7 @@ class StrategyGenerator:
     def _load_ai_config(self) -> Dict[str, Any]:
         """加载 AI API 配置"""
         try:
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_config_manager import get_ai_config_manager
             config_mgr = get_ai_config_manager()
             configs = config_mgr.get_all_ai_api_configs()
             # 找到第一个已验证的 AI

@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -573,7 +573,7 @@ if __name__ == "__main__":
         "DOGE-USDT-SWAP",
         "XRP-USDT-SWAP",
     ]
-    timeframes = ["1m", "3m", "5m", "15m", "30m", "1h"]
+    timeframes = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1D"]
     
     tasks = [
         (sym, tf, 50)

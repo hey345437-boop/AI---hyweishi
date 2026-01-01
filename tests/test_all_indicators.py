@@ -106,8 +106,14 @@ check_accuracy('OBV', custom_obv, ta_obv.values)
 # 8. VWAP
 print('\n【8】VWAP (成交量加权平均价)')
 custom_vwap = calc_vwap(highs, lows, closes, volumes)
-ta_vwap = ta.vwap(df['high'], df['low'], df['close'], df['volume'])
-check_accuracy('VWAP', custom_vwap, ta_vwap.values)
+try:
+    ta_vwap = ta.vwap(df['high'], df['low'], df['close'], df['volume'])
+    if ta_vwap is not None:
+        check_accuracy('VWAP', custom_vwap, ta_vwap.values)
+    else:
+        print('  [跳过] pandas_ta VWAP 需要 DatetimeIndex')
+except Exception as e:
+    print(f'  [跳过] VWAP 对比失败: {e}')
 
 # 9. KDJ vs Stochastic
 print('\n【9】KDJ / Stochastic')

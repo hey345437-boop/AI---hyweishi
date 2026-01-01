@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+ENV
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+.kiro
+
+# 数据文件
+*.db
+data/secrets.enc
+logs/*.log
+
+# 其他
+*.md
+!README.md
+Dockerfile
+docker-compose.yml
+.dockerignore

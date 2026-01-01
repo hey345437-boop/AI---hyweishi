@@ -1,0 +1,14 @@
+{
+  "strategy_id": "ma_cross_example",
+  "display_name": "📈 均线交叉示例",
+  "class_name": "MACrossStrategy",
+  "description": "经典双均线交叉策略，教学示例",
+  "version": "1.0.0",
+  "order": 201,
+  "default_params": {
+    "position_pct": 2.0,
+    "leverage": 5,
+    "stop_loss_pct": 1.5,
+    "take_profit_pct": 3.0
+  }
+}

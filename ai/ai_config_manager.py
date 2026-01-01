@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 #
@@ -287,8 +287,6 @@ class AIConfigManager:
         except Exception as e:
             print(f"[AIConfigManager] 创建表失败: {e}")
     
-    # ========== 配置读写 ==========
-    
     def get_config(self, key: str, default: Any = None) -> Any:
         """获取配置值"""
         try:
@@ -331,8 +329,6 @@ class AIConfigManager:
         except Exception as e:
             print(f"[AIConfigManager] 保存配置失败: {e}")
             return False
-    
-    # ========== AI 配置 ==========
     
     def get_ai_settings(self) -> Dict[str, Any]:
         """获取完整的 AI 设置"""
@@ -381,8 +377,6 @@ class AIConfigManager:
         settings = self.get_ai_settings()
         settings["kline_count"] = count
         return self.save_ai_settings(settings)
-    
-    # ========== 提示词管理 ==========
     
     def get_preset(self, preset_id: str) -> Optional[PromptPreset]:
         """获取预设提示词"""
@@ -442,8 +436,6 @@ class AIConfigManager:
             return preset.prompt
         
         return PROMPT_PRESETS["balanced"].prompt
-    
-    # ========== AI API 配置 ==========
     
     def get_ai_api_config(self, ai_id: str) -> Optional[Dict[str, Any]]:
         """获取 AI API 配置"""
@@ -530,14 +522,18 @@ class AIConfigManager:
             "claude": "ANTHROPIC_API_KEY"
         }
         
+        configs = {}
+        
         try:
+            # 确保表存在
+            self._ensure_table()
+            
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("SELECT ai_id, api_key, enabled, verified, model FROM ai_api_configs")
             rows = cursor.fetchall()
             conn.close()
             
-            configs = {}
             for row in rows:
                 configs[row[0]] = {
                     "api_key": row[1],
@@ -545,26 +541,12 @@ class AIConfigManager:
                     "verified": row[3] == 1,
                     "model": row[4] if len(row) > 4 else ""
                 }
-            
-            # 如果数据库中没有配置，尝试从环境变量读取
-            for ai_id, env_key in env_keys.items():
-                if ai_id not in configs or not configs[ai_id].get("api_key"):
-                    env_value = os.getenv(env_key, "")
-                    if env_value:
-                        configs[ai_id] = {
-                            "api_key": env_value,
-                            "enabled": True,
-                            "verified": False,  # 环境变量的 Key 需要验证
-                            "model": ""  # 使用默认模型
-                        }
-            
-            return configs
-        except Exception as e:
-            print(f"[AIConfigManager] 读取所有 API 配置失败: {e}")
-            
-            # 回退到环境变量
-            configs = {}
-            for ai_id, env_key in env_keys.items():
+        except Exception:
+            pass  # 静默处理，回退到环境变量
+        
+        # 补充环境变量配置
+        for ai_id, env_key in env_keys.items():
+            if ai_id not in configs or not configs[ai_id].get("api_key"):
                 env_value = os.getenv(env_key, "")
                 if env_value:
                     configs[ai_id] = {
@@ -573,9 +555,8 @@ class AIConfigManager:
                         "verified": False,
                         "model": ""
                     }
-            return configs
-    
-    # ========== AI 交易记录 ==========
+        
+        return configs
     
     def record_ai_trade(self, ai_id: str, symbol: str, side: str, 
                         entry_price: float, quantity: float, reason: str = "") -> int:
@@ -644,23 +625,8 @@ class AIConfigManager:
             print(f"[AIConfigManager] 读取交易记录失败: {e}")
             return []
     
-    # ========== 调度器状态持久化 ==========
-    
     def get_scheduler_state(self) -> Dict[str, Any]:
-        """
-        获取调度器状态（用于 UI 重启后恢复）
-        
-        返回:
-            {
-                'enabled': True/False,
-                'symbols': [...],
-                'timeframes': [...],
-                'agents': [...],
-                'ai_takeover': True/False,
-                'user_prompt': '...',
-                'last_updated': '...'
-            }
-        """
+        """获取调度器状态（用于 UI 重启后恢复）"""
         return self.get_config("scheduler_state", {
             'enabled': False,
             'symbols': ['BTC/USDT:USDT'],

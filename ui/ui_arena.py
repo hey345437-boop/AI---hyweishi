@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -46,14 +46,14 @@ def _get_ai_models_from_providers() -> Dict[str, Dict[str, Any]]:
                 "api_base_url": provider.api_base,
                 "requires_api_key": True,
             }
-        # 添加别名映射（如 spark_lite -> spark）
+        # 添加别名映射
         for alias, real_id in PROVIDER_ALIASES.items():
             if real_id in models and alias not in models:
                 models[alias] = models[real_id].copy()
                 models[alias]["id"] = alias  # 保持原始 ID
         return models
     except ImportError as e:
-        # 回退到最小硬编码列表（仅用于 ai_providers.py 不可用的极端情况）
+        # 回退到最小硬编码列表
         import logging
         logging.getLogger(__name__).warning(f"[Arena] ai_providers.py 导入失败: {e}，使用最小回退列表")
         return _AI_MODELS_MINIMAL_FALLBACK
@@ -386,6 +386,7 @@ class ArenaDataInterface:
 
 # ============ 真实数据获取 ============
 
+@st.cache_data(ttl=5, show_spinner=False)
 def get_arena_real_data() -> Dict[str, Dict[str, Any]]:
     """
     获取 AI 竞技场真实数据（从数据库读取）
@@ -2770,7 +2771,7 @@ def _render_ai_kline_chart_realtime(view_model: Dict, actions: Dict, arena_data:
     
     # 导入必要的模块
     try:
-        from ui_legacy import (
+        from ui.ui_legacy import (
             _fetch_ohlcv_for_chart, 
             check_market_api_status,
             MARKET_API_URL
@@ -2787,7 +2788,7 @@ def _render_ai_kline_chart_realtime(view_model: Dict, actions: Dict, arena_data:
         st.info("请先在侧边栏配置交易池")
         return
     
-    timeframes = ['1m', '3m', '5m', '15m', '30m', '1h']
+    timeframes = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1D']
     
     # 控制栏
     col_sym, col_tf, col_status = st.columns([3, 2, 1])
@@ -3693,9 +3694,13 @@ def _restore_scheduler_if_needed():
     2. 检查调度器是否已在运行
     3. 验证 API Keys 有效性
     """
-    # 避免重复恢复
-    if st.session_state.get('_scheduler_restored', False):
+    # 避免重复恢复 - 使用更持久的标记
+    restore_key = '_scheduler_restore_checked'
+    if st.session_state.get(restore_key, False):
         return
+    
+    # 标记已检查，避免重复执行
+    st.session_state[restore_key] = True
     
     try:
         from ai.ai_config_manager import get_ai_config_manager
@@ -3711,13 +3716,11 @@ def _restore_scheduler_if_needed():
             # 检查数据库状态：如果数据库显示已禁用，则停止调度器
             if not db_enabled:
                 stop_scheduler()
-                st.session_state._scheduler_restored = True
                 st.session_state.arena_scheduler_running = False
                 st.session_state.ai_takeover_live = False
                 return
             
             # 数据库显示启用，同步状态
-            st.session_state._scheduler_restored = True
             st.session_state.arena_scheduler_running = True
             # 同步调度器配置到 session_state
             scheduler = get_scheduler()
@@ -3730,7 +3733,6 @@ def _restore_scheduler_if_needed():
         
         # 调度器未运行，检查是否需要恢复
         if not db_enabled:
-            st.session_state._scheduler_restored = True
             return
         
         # 检查状态是否过期（超过 24 小时不自动恢复）
@@ -3742,7 +3744,6 @@ def _restore_scheduler_if_needed():
                 if datetime.now() - last_time > timedelta(hours=24):
                     # 状态过期，清除并不恢复
                     config_mgr.clear_scheduler_state()
-                    st.session_state._scheduler_restored = True
                     return
             except Exception:
                 pass
@@ -3763,7 +3764,6 @@ def _restore_scheduler_if_needed():
         if valid_agents and api_keys:
             # 再次检查调度器是否已在运行（防止并发）
             if is_scheduler_running():
-                st.session_state._scheduler_restored = True
                 st.session_state.arena_scheduler_running = True
                 return
             
@@ -3999,7 +3999,7 @@ def render_main_with_arena(view_model: Dict, actions: Dict):
     else:
         # 调用原有的 render_main
         try:
-            from ui_legacy import render_main
+            from ui.ui_legacy import render_main
             render_main(view_model, actions)
         except ImportError:
             st.error("无法加载经典 UI 模块")

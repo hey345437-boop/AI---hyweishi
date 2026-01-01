@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 # ============================================================================
@@ -34,10 +34,10 @@ try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
     PSYCOPG2_AVAILABLE = True
-    logger.info("PostgreSQL 支持已加载 (psycopg2)")
+    logger.debug("PostgreSQL 支持已加载 (psycopg2)")
 except ImportError:
     PSYCOPG2_AVAILABLE = False
-    logger.info("PostgreSQL 支持未加载，将使用 SQLite")
+    logger.debug("PostgreSQL 支持未加载，将使用 SQLite")
 
 from .db_config import get_db_config_from_env_and_secrets, PROJECT_ROOT, DATA_DIR
 import json
@@ -739,12 +739,20 @@ def init_db(db_config: Optional[Dict[str, Any]] = None) -> None:
                 'hedge_position_pct': "REAL DEFAULT 0.03",
                 'hard_tp_pct': "REAL DEFAULT 0.02",
                 'hedge_tp_pct': "REAL DEFAULT 0.005",
+                # 自定义策略参数
+                'custom_position_pct': "REAL DEFAULT 0.02",
+                'custom_stop_loss_pct': "REAL DEFAULT 0.02",
                 # 最大仓位比例（风控）
                 'max_position_pct': "REAL DEFAULT 0.10",
                 # 双通道信号执行模式
                 'execution_mode': "TEXT DEFAULT 'intrabar'",
                 # 数据源模式: REST 或 WebSocket
                 'data_source_mode': "TEXT DEFAULT 'REST'",
+                # 扫描周期配置（JSON 格式，如 '["1m","5m","15m","1h"]'）
+                'scan_timeframes': "TEXT DEFAULT '[\"1m\",\"3m\",\"5m\",\"15m\",\"30m\",\"1h\"]'",
+                # 用户引导状态（持久化）
+                'disclaimer_accepted': "INTEGER DEFAULT 0",
+                'onboarding_completed': "INTEGER DEFAULT 0",
             }
             
             # 逐个添加缺失的列
@@ -1060,12 +1068,16 @@ def update_bot_config(db_config: Optional[Dict[str, Any]] = None, **fields) -> N
         # 新增：交易参数配置
         'leverage', 'main_position_pct', 'sub_position_pct', 
         'hedge_position_pct', 'hard_tp_pct', 'hedge_tp_pct',
+        # 自定义策略参数
+        'custom_position_pct', 'custom_stop_loss_pct',
         # 最大仓位比例（风控）
         'max_position_pct',
         # 双通道信号执行模式
         'execution_mode',
         # 数据源模式（REST/WebSocket）
-        'data_source_mode'
+        'data_source_mode',
+        # 扫描周期配置
+        'scan_timeframes'
     }
     
     # 过滤掉不在白名单中的字段

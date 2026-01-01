@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -291,16 +291,28 @@ class BaseAgent(ABC):
             for i, c in enumerate(recent)
         ])
         
-        # 构建情绪分析部分
+        # 构建情绪分析部分（增强版：包含新闻分析）
         sentiment_section = ""
         if context.sentiment:
             value = context.sentiment.get('value', 'N/A')
             classification = context.sentiment.get('classification', '未知')
+            combined_score = context.sentiment.get('combined_score', 0)
+            combined_bias = context.sentiment.get('combined_bias', 'neutral')
+            key_events = context.sentiment.get('key_events', [])
+            suggestion = context.sentiment.get('suggestion', '')
+            
             sentiment_section = f"""
 【市场情绪 (Fear & Greed Index)】
 - 指数值: {value}
 - 情绪等级: {classification}
+- 综合得分: {combined_score} (偏向: {combined_bias})
 """
+            if key_events:
+                sentiment_section += "- 关键事件:\n"
+                for event in key_events[:3]:
+                    sentiment_section += f"  • {event}\n"
+            if suggestion:
+                sentiment_section += f"- 新闻建议: {suggestion}\n"
         
         # 构建持仓状态
         position_text = "无持仓"
@@ -630,10 +642,18 @@ K线: {candles_text}
         
         all_symbols_data = "\n".join(all_data_parts)
         
-        # 情绪数据
+        # 情绪数据（增强版）
         sentiment_text = ""
         if sentiment:
-            sentiment_text = f"Fear & Greed: {sentiment.get('value', 'N/A')} ({sentiment.get('classification', '未知')})"
+            fg_value = sentiment.get('value', 'N/A')
+            fg_class = sentiment.get('classification', '未知')
+            combined = sentiment.get('combined_score', 0)
+            bias = sentiment.get('combined_bias', 'neutral')
+            sentiment_text = f"Fear & Greed: {fg_value} ({fg_class}) | 综合: {combined} ({bias})"
+            
+            key_events = sentiment.get('key_events', [])
+            if key_events:
+                sentiment_text += f" | 事件: {key_events[0][:30]}..."
         
         # 竞技场上下文
         arena_text = ""

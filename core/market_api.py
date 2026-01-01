@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -38,7 +38,10 @@ from dotenv import load_dotenv
 import traceback
 
 # 添加项目根目录到 Python 路径（用于导入策略模块）
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_current_dir)  # 上一级目录是项目根目录
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # 加载环境变量
 load_dotenv()
@@ -283,7 +286,7 @@ def _calculate_strategy_markers(ohlcv: List[List], symbol: str, timeframe: str, 
     
     try:
         # 动态加载策略模块
-        from strategy_registry import get_strategy_registry
+        from strategies.strategy_registry import get_strategy_registry
         registry = get_strategy_registry()
         
         # 获取策略类并实例化

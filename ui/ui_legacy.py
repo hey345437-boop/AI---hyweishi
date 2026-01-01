@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 # ============================================================================
@@ -76,8 +76,15 @@ except ImportError:
     RUN_MODE_DB_TO_UI['sim'] = "○ 测试"
     RUN_MODE_DB_TO_UI['paper_on_real'] = "○ 测试"
 
+# HTML 模板导入（保持代码整洁）
+from ui.templates import (
+    DISCLAIMER_STYLES, DISCLAIMER_CONTENT,
+    ONBOARDING_STYLES, ONBOARDING_STEPS,
+    CONTACT_FOOTER_HTML, MAIN_FOOTER_HTML,
+    render_onboarding_step
+)
 
-# ============ Market API 客户端 ============
+# Market API
 MARKET_API_URL = os.getenv("MARKET_API_URL", "http://127.0.0.1:8000")
 
 
@@ -131,9 +138,7 @@ def check_market_api_status() -> bool:
     except Exception:
         return False
 
-
-# ============ K线图专用缓存（与交易引擎完全隔离）============
-# UI K线图使用独立缓存，只显示收盘K线，不影响交易引擎
+# K线图专用缓存（与交易引擎隔离）
 _UI_KLINE_CACHE = {}  # {(symbol, tf): {'data': [...], 'ts': timestamp}}
 _UI_KLINE_CACHE_TTL = 10  # 10秒缓存
 
@@ -201,6 +206,8 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
     4. 自动检测系统代理
     """
     import time as time_module
+    from utils.candle_time_utils import normalize_daily_timeframe
+    
     cache_key = (symbol, timeframe)
     now = time_module.time()
     
@@ -209,6 +216,9 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
         cached = _UI_KLINE_CACHE[cache_key]
         if now - cached['ts'] < _UI_KLINE_CACHE_TTL:
             return cached['data']
+    
+    # 日线格式转换
+    actual_timeframe = normalize_daily_timeframe(timeframe)
     
     # 从交易所获取数据
     try:
@@ -223,14 +233,12 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
         # 如果环境变量没有代理，自动检测系统代理
         if not http_proxy and not https_proxy:
             try:
-                from env_validator import EnvironmentValidator
+                from utils.env_validator import EnvironmentValidator
                 proxy_config = EnvironmentValidator.detect_system_proxy()
                 http_proxy = proxy_config.get('http_proxy')
                 https_proxy = proxy_config.get('https_proxy') or http_proxy
-                if http_proxy or https_proxy:
-                    print(f"[K线图] 自动检测到系统代理: {https_proxy or http_proxy}")
-            except Exception as e:
-                print(f"[K线图] 自动检测代理失败: {e}")
+            except Exception:
+                pass
         
         config = {
             'enableRateLimit': True,
@@ -244,7 +252,7 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
             }
         
         exchange = ccxt.okx(config)
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit + 1)  # 多拉一根
+        ohlcv = exchange.fetch_ohlcv(symbol, actual_timeframe, limit=limit + 1)  # 多拉一根
         
         # 强制去掉最后一根（正在形成的K线），只保留收盘K线
         if ohlcv and len(ohlcv) > 1:
@@ -260,7 +268,9 @@ def _fetch_ohlcv_for_chart(symbol: str, timeframe: str, limit: int = 500) -> lis
         
         return closed_ohlcv
     except Exception as e:
-        print(f"[_fetch_ohlcv_for_chart] Error: {e}")
+        # 静默处理错误，避免刷屏
+        import logging
+        logging.getLogger(__name__).debug(f"[_fetch_ohlcv_for_chart] Error: {e}")
         # 返回旧缓存（如果有）
         if cache_key in _UI_KLINE_CACHE:
             return _UI_KLINE_CACHE[cache_key]['data']
@@ -274,22 +284,7 @@ def _fetch_ohlcv_direct(symbol: str, timeframe: str, limit: int = 500) -> list:
     return _fetch_ohlcv_for_chart(symbol, timeframe, limit)
 
 
-# Sentiment fetcher (cached 60s)
-@st.cache_data(ttl=60)
-def fetch_sentiment_cached():
-    try:
-        response = requests.get("https://api.alternative.me/fng/", timeout=5)
-        data = response.json()
-        item = data.get("data", [])[0]
-        value = item.get("value")
-        classification = item.get("value_classification")
-        ts = int(time.time())
-        return {'value': value, 'classification': classification, 'ts': ts}
-    except Exception:
-        return {'value': None, 'classification': None, 'ts': int(time.time())}
-
-
-# ============ 实时数据获取函数(短 TTL 缓存)============
+# 实时数据获取
 @st.cache_data(ttl=3)
 def fetch_btc_ticker_cached():
     """获取 BTC 实时价格(3秒缓存)
@@ -337,13 +332,8 @@ def fetch_btc_ticker_cached():
 
 @st.cache_data(ttl=3)
 def fetch_account_balance_cached(_actions_hash: str):
-    """获取账户余额(3秒缓存)
-    
-    _actions_hash 用于在 API 配置变更后强制刷新缓存
-    """
+    """获取账户余额(3秒缓存)"""
     try:
-        # 这里返回占位符, 实际数据由 view_model 提供
-        # 此函数主要用于触发缓存刷新机制
         return {'equity': None, 'available': None, 'ts': int(time.time())}
     except Exception:
         return {'equity': None, 'available': None, 'ts': int(time.time())}
@@ -463,415 +453,136 @@ def plot_nofx_equity_curve(timestamps, equity_values, initial_equity=None):
 # ACCESS_PASSWORD 从环境变量读取, 支持开发模式默认密码
 from utils.env_validator import EnvironmentValidator
 
-# 验证访问密码配置
-_pwd_valid, _pwd_warning, ACCESS_PASSWORD = EnvironmentValidator.validate_access_password()
-if not _pwd_valid:
-    raise RuntimeError(f" {_pwd_warning}")
-
-# 标记是否使用了开发模式默认密码(用于UI警告显示)
-USING_DEV_PASSWORD = bool(_pwd_warning)
+# 开源版本：无需密码验证
+# _pwd_valid, _pwd_warning, ACCESS_PASSWORD = EnvironmentValidator.validate_access_password()
+USING_DEV_PASSWORD = False
 
 
 def render_login(view_model, actions):
-    """渲染登录页面"""
-    # P1修复: 会话超时检查(4小时)
-    SESSION_TIMEOUT_SECONDS = 4 * 60 * 60  # 4小时
-    if st.session_state.get("logged_in", False):
-        login_time = st.session_state.get("login_time", 0)
-        if login_time > 0 and (time.time() - login_time) > SESSION_TIMEOUT_SECONDS:
-            st.session_state.logged_in = False
-            st.session_state.login_time = 0
-            st.warning("⚠️ 会话已超时, 请重新登录")
+    """渲染登录页面 - 开源版本（一键登录 + 免责声明）"""
+    # 从数据库读取用户状态（持久化）
+    bot_config = actions.get("get_bot_config", lambda: {})()
+    db_disclaimer_accepted = bot_config.get("disclaimer_accepted", 0) == 1
+    db_onboarding_completed = bot_config.get("onboarding_completed", 0) == 1
     
+    # 同步到 session_state
+    if db_disclaimer_accepted:
+        st.session_state.disclaimer_accepted = True
+    if db_onboarding_completed:
+        st.session_state.onboarding_completed = True
+    
+    # 检查是否已同意免责声明
+    if not st.session_state.get("disclaimer_accepted", False):
+        _render_disclaimer_page(actions)
+        return
+    
+    # 检查是否已完成引导
+    if not st.session_state.get("onboarding_completed", False):
+        _render_onboarding_page(actions)
+        return
+    
+    # 已完成所有流程，自动登录
     if not st.session_state.get("logged_in", False):
-        # 高科技登录页面样式 - 粉色流动线条
-        st.markdown("""
-        <style>
-        /* 高科技深色背景 */
-        .stApp {
-            background: #0a0e17 !important;
-            overflow: hidden;
-        }
+        _auto_login(actions)
+
+
+def _render_disclaimer_page(actions):
+    """渲染免责声明页面"""
+    st.markdown(DISCLAIMER_STYLES, unsafe_allow_html=True)
+    
+    st.markdown('<div class="login-icon">⚡</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-title">何以为势</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-subtitle">QUANTITATIVE TRADING SYSTEM</div>', unsafe_allow_html=True)
+    
+    c1, c2, c3 = st.columns([1, 3, 1])
+    with c2:
+        st.markdown(DISCLAIMER_CONTENT, unsafe_allow_html=True)
         
-        /* 顶部导航栏背景统一 */
-        header[data-testid="stHeader"] {
-            background: rgba(10, 14, 23, 0.95) !important;
-            backdrop-filter: blur(10px) !important;
-        }
+        agree = st.checkbox(
+            "我已阅读并同意上述免责声明，了解交易风险并自愿承担",
+            key="agree_disclaimer"
+        )
         
-        /* 标题动画 */
-        @keyframes textGlow {
-            0%, 100% { text-shadow: 0 0 20px rgba(255, 107, 157, 0.5), 0 0 40px rgba(255, 107, 157, 0.3); }
-            50% { text-shadow: 0 0 30px rgba(255, 143, 171, 0.8), 0 0 60px rgba(255, 143, 171, 0.5); }
-        }
-        @keyframes textShine { 
-            0% { background-position: 0% 50%; } 
-            100% { background-position: 200% 50%; } 
-        }
-        @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-10px); }
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        .login-title {
-            font-size: 56px;
-            font-weight: 900;
-            background: linear-gradient(90deg, #ff6b9d, #ff8fab, #ff4081, #ff6b9d);
-            background-size: 200% auto;
-            color: transparent;
-            -webkit-background-clip: text;
-            background-clip: text;
-            animation: textShine 3s linear infinite, textGlow 2s ease-in-out infinite;
-            letter-spacing: 8px;
-            margin-bottom: 10px;
-            text-align: center;
-        }
+        if st.button("(◕‿◕) 我已了解，继续", disabled=not agree, use_container_width=True):
+            st.session_state.disclaimer_accepted = True
+            # 持久化到数据库
+            actions.get("update_bot_config", lambda **kw: None)(disclaimer_accepted=1)
+            st.rerun()
         
-        .login-subtitle {
-            font-size: 14px;
-            color: #4a5568;
-            letter-spacing: 6px;
-            font-family: 'Courier New', monospace;
-            margin-bottom: 40px;
-            text-align: center;
-            animation: pulse 2s ease-in-out infinite;
-        }
+        st.markdown(CONTACT_FOOTER_HTML, unsafe_allow_html=True)
+    
+    st.stop()
+
+
+def _render_onboarding_page(actions):
+    """渲染引导页面"""
+    st.markdown(ONBOARDING_STYLES, unsafe_allow_html=True)
+    
+    st.markdown('<div style="text-align:center; font-size:48px; margin-bottom:10px;">🚀</div>', unsafe_allow_html=True)
+    st.markdown('<h2 style="text-align:center; color:#ff6b9d; margin-bottom:30px;">欢迎使用何以为势</h2>', unsafe_allow_html=True)
+    
+    c1, c2, c3 = st.columns([1, 3, 1])
+    with c2:
+        for step in ONBOARDING_STEPS:
+            st.markdown(render_onboarding_step(step), unsafe_allow_html=True)
         
-        .login-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-            animation: float 3s ease-in-out infinite;
-            filter: drop-shadow(0 0 20px rgba(255, 107, 157, 0.5));
-        }
+        st.markdown("<br>", unsafe_allow_html=True)
         
-        .login-divider {
-            width: 120px;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #ff6b9d, #ff8fab, transparent);
-            margin: 15px auto;
-        }
+        if st.button("(≧▽≦) 开始使用", use_container_width=True):
+            st.session_state.onboarding_completed = True
+            # 持久化到数据库
+            actions.get("update_bot_config", lambda **kw: None)(onboarding_completed=1)
+            st.rerun()
         
-        /* 输入框样式 */
-        .stTextInput > div > div > input {
-            background: rgba(255, 107, 157, 0.05) !important;
-            border: 1px solid rgba(255, 107, 157, 0.2) !important;
-            border-radius: 10px !important;
-            color: #fff !important;
-            padding: 15px !important;
-            font-size: 16px !important;
-        }
-        .stTextInput > div > div > input:focus {
-            border-color: #ff6b9d !important;
-            box-shadow: 0 0 20px rgba(255, 107, 157, 0.3) !important;
-        }
-        
-        /* 按钮样式 - 粉色 */
-        .stButton > button {
-            background: linear-gradient(135deg, #ff6b9d 0%, #ff4081 100%) !important;
-            border: none !important;
-            border-radius: 10px !important;
-            color: white !important;
-            font-weight: 600 !important;
-            padding: 15px 30px !important;
-            font-size: 16px !important;
-            width: 100% !important;
-            transition: all 0.3s ease !important;
-        }
-        .stButton > button:hover {
-            transform: translateY(-2px) !important;
-            box-shadow: 0 10px 30px rgba(255, 107, 157, 0.4) !important;
-        }
-        
-        /* ===== 高科技流动线条背景 ===== */
-        .tech-bg {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 0;
-            overflow: hidden;
-        }
-        
-        /* 网格背景 */
-        .grid-bg {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            background-image: 
-                linear-gradient(rgba(255, 107, 157, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 107, 157, 0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
-            animation: gridMove 20s linear infinite;
-        }
-        
-        @keyframes gridMove {
-            0% { transform: perspective(500px) rotateX(60deg) translateY(0); }
-            100% { transform: perspective(500px) rotateX(60deg) translateY(50px); }
-        }
-        
-        /* 流动光线 */
-        .flow-line {
-            position: absolute;
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #ff6b9d, #ff8fab, transparent);
-            animation: flowLine 4s ease-in-out infinite;
-            opacity: 0.6;
-        }
-        
-        .flow-line.fl1 { top: 15%; width: 30%; left: -30%; animation-delay: 0s; }
-        .flow-line.fl2 { top: 35%; width: 40%; left: -40%; animation-delay: 1s; }
-        .flow-line.fl3 { top: 55%; width: 35%; left: -35%; animation-delay: 2s; }
-        .flow-line.fl4 { top: 75%; width: 45%; left: -45%; animation-delay: 0.5s; }
-        .flow-line.fl5 { top: 85%; width: 25%; left: -25%; animation-delay: 1.5s; }
-        
-        @keyframes flowLine {
-            0% { transform: translateX(0); opacity: 0; }
-            10% { opacity: 0.6; }
-            90% { opacity: 0.6; }
-            100% { transform: translateX(calc(100vw + 100%)); opacity: 0; }
-        }
-        
-        /* 垂直流动线 */
-        .flow-line-v {
-            position: absolute;
-            width: 2px;
-            background: linear-gradient(180deg, transparent, #ff6b9d, transparent);
-            animation: flowLineV 6s ease-in-out infinite;
-            opacity: 0.4;
-        }
-        
-        .flow-line-v.fv1 { left: 10%; height: 30%; top: -30%; animation-delay: 0s; }
-        .flow-line-v.fv2 { left: 30%; height: 25%; top: -25%; animation-delay: 1.5s; }
-        .flow-line-v.fv3 { left: 70%; height: 35%; top: -35%; animation-delay: 3s; }
-        .flow-line-v.fv4 { left: 90%; height: 20%; top: -20%; animation-delay: 2s; }
-        
-        @keyframes flowLineV {
-            0% { transform: translateY(0); opacity: 0; }
-            10% { opacity: 0.4; }
-            90% { opacity: 0.4; }
-            100% { transform: translateY(calc(100vh + 100%)); opacity: 0; }
-        }
-        
-        /* 光点粒子 */
-        .particle {
-            position: absolute;
-            width: 4px;
-            height: 4px;
-            background: #ff6b9d;
-            border-radius: 50%;
-            box-shadow: 0 0 10px #ff6b9d, 0 0 20px #ff6b9d;
-            animation: particleFloat 8s ease-in-out infinite;
-        }
-        
-        .particle.p1 { top: 10%; left: 20%; animation-delay: 0s; }
-        .particle.p2 { top: 25%; left: 80%; animation-delay: 1s; }
-        .particle.p3 { top: 45%; left: 15%; animation-delay: 2s; }
-        .particle.p4 { top: 60%; left: 70%; animation-delay: 3s; }
-        .particle.p5 { top: 75%; left: 40%; animation-delay: 4s; }
-        .particle.p6 { top: 85%; left: 90%; animation-delay: 5s; }
-        
-        @keyframes particleFloat {
-            0%, 100% { transform: translate(0, 0); opacity: 0.3; }
-            25% { transform: translate(20px, -30px); opacity: 0.8; }
-            50% { transform: translate(-10px, -50px); opacity: 0.5; }
-            75% { transform: translate(30px, -20px); opacity: 0.7; }
-        }
-        
-        /* 角落装饰 */
-        .corner-deco {
-            position: fixed;
-            width: 100px;
-            height: 100px;
-            border: 2px solid rgba(255, 107, 157, 0.2);
-            z-index: 1;
-        }
-        
-        .corner-deco.top-left {
-            top: 20px;
-            left: 20px;
-            border-right: none;
-            border-bottom: none;
-        }
-        
-        .corner-deco.top-right {
-            top: 20px;
-            right: 20px;
-            border-left: none;
-            border-bottom: none;
-        }
-        
-        .corner-deco.bottom-left {
-            bottom: 20px;
-            left: 20px;
-            border-right: none;
-            border-top: none;
-        }
-        
-        .corner-deco.bottom-right {
-            bottom: 20px;
-            right: 20px;
-            border-left: none;
-            border-top: none;
-        }
-        
-        /* 中心光晕 */
-        .center-glow {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, rgba(255, 107, 157, 0.1) 0%, transparent 70%);
-            pointer-events: none;
-            z-index: 0;
-            animation: centerPulse 4s ease-in-out infinite;
-        }
-        
-        @keyframes centerPulse {
-            0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.5; }
-            50% { transform: translate(-50%, -50%) scale(1.1); opacity: 0.8; }
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # 登录页面内容
-        st.markdown('<div class="login-icon">⚡</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-title">何以为势</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-divider"></div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-subtitle">QUANTITATIVE TRADING SYSTEM</div>', unsafe_allow_html=True)
-        
-        # 高科技流动线条背景装饰元素（通过CSS实现，不需要额外HTML）
-        st.markdown('''
-        <div class="tech-bg">
-            <div class="grid-bg"></div>
-            <div class="flow-line fl1"></div>
-            <div class="flow-line fl2"></div>
-            <div class="flow-line fl3"></div>
-            <div class="flow-line fl4"></div>
-            <div class="flow-line fl5"></div>
-            <div class="flow-line-v fv1"></div>
-            <div class="flow-line-v fv2"></div>
-            <div class="flow-line-v fv3"></div>
-            <div class="flow-line-v fv4"></div>
-            <div class="particle p1"></div>
-            <div class="particle p2"></div>
-            <div class="particle p3"></div>
-            <div class="particle p4"></div>
-            <div class="particle p5"></div>
-            <div class="particle p6"></div>
-        </div>
-        <div class="corner-deco top-left"></div>
-        <div class="corner-deco top-right"></div>
-        <div class="corner-deco bottom-left"></div>
-        <div class="corner-deco bottom-right"></div>
-        <div class="center-glow"></div>
-        ''', unsafe_allow_html=True)
-        
-        # 显示开发模式警告（简化版）
-        if USING_DEV_PASSWORD:
-            st.warning("⚠️ 开发模式 - 请设置 STREAMLIT_ACCESS_PASSWORD 环境变量")
-        
-        c1, c2, c3 = st.columns([1, 2, 1])
-        with c2:
-            # 记住密码功能：使用 st_javascript 组件
-            # 注入 JavaScript 来处理 localStorage
-            st.markdown("""
-            <style>
-                /* 记住密码复选框右对齐 */
-                .remember-pwd-container {
-                    display: flex;
-                    justify-content: flex-end;
-                    margin-top: 5px;
-                    margin-bottom: 10px;
-                }
-                .remember-pwd-container label {
-                    color: #888;
-                    font-size: 12px;
-                }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            # 检查 localStorage 中是否有保存的密码（通过 URL 参数传递）
-            saved_pwd = st.query_params.get("_sp", "")
-            
-            password_input = st.text_input(
-                "🔑 访问密码", 
-                type="password", 
-                placeholder="请输入访问密码", 
-                label_visibility="collapsed",
-                value=saved_pwd  # 如果有保存的密码，自动填充
-            )
-            
-            # 记住密码复选框（右对齐，使用HTML实现）
-            col_spacer, col_checkbox = st.columns([3, 1])
-            with col_checkbox:
-                remember_pwd = st.checkbox("记住密码", value=True, key="remember_password")
-            
-            # 按钮放在独立容器中，确保宽度100%
-            st.markdown("<br>", unsafe_allow_html=True)
-            btn_container = st.container()
-            with btn_container:
-                if st.button(" 进入系统", width="stretch"):
-                    # 忽略用户输入两端的意外空白字符后比较
-                    if (password_input or '').strip() == ACCESS_PASSWORD:
-                        # 如果勾选了记住密码，保存到 URL 参数（下次访问时自动填充）
-                        if remember_pwd:
-                            st.query_params["_sp"] = (password_input or "").strip()
-                        else:
-                            if "_sp" in st.query_params:
-                                del st.query_params["_sp"]
-                        st.session_state.logged_in = True
-                        st.session_state.username = "admin"  # 默认用户
-                        # P1修复: 记录登录时间用于会话超时
-                        st.session_state.login_time = time.time()
-                        
-                        # 从数据库加载配置
-                        bot_config = actions.get("get_bot_config", lambda: {})()
-                        
-                        # 转换run_mode为UI显示模式(与顶部定义一致)
-                        run_mode_map = {
-                            "live": "● 实盘",
-                            "paper": "○ 测试",  # paper模式对应测试
-                            "sim": "○ 测试"  # 兼容旧的sim模式
-                        }
-                        
-                        # 设置session_state
-                        st.session_state.trading_active = bot_config.get("enable_trading", 0) == 1
-                        st.session_state.auto_symbols = bot_config.get("symbols", "").split(",") if bot_config.get("symbols") else []
-                        st.session_state.open_positions = {}
-                        st.session_state.hedge_positions = {}
-                        st.session_state.env_mode = run_mode_map.get(bot_config.get("run_mode", "sim"), "● 实盘")
-                        st.session_state.strategy_module = "strategy_v2"  # 默认趋势2
-                        st.session_state.position_sizes = {
-                            "primary": bot_config.get("position_size", 0.05), 
-                            "secondary": bot_config.get("position_size", 0.05) / 2
-                        }
-                        
-                        # 设置入场动画标志，登录后显示
-                        st.session_state.show_intro_animation = True
-                        
-                        st.success("✅ 登录成功!")
-                        time.sleep(0.3)
-                        st.rerun()
-                    else:
-                        st.error("❌ 密码错误, 请重试")
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("""
-            <div style="text-align: center; color: #555; font-size: 12px;">
-                 请保管好您的访问密码
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.stop()  # 阻止未登录用户访问后续内容
+        st.markdown(CONTACT_FOOTER_HTML, unsafe_allow_html=True)
+    
+    st.stop()
+
+
+def _auto_login(actions):
+    """自动登录（无需密码）"""
+    st.session_state.logged_in = True
+    st.session_state.username = "user"
+    st.session_state.login_time = time.time()
+    
+    # 从数据库加载配置
+    bot_config = actions.get("get_bot_config", lambda: {})()
+    
+    # 转换run_mode为UI显示模式
+    run_mode_map = {
+        "live": "● 实盘",
+        "paper": "○ 测试",
+        "sim": "○ 测试"
+    }
+    
+    # 设置session_state
+    st.session_state.trading_active = bot_config.get("enable_trading", 0) == 1
+    st.session_state.auto_symbols = bot_config.get("symbols", "").split(",") if bot_config.get("symbols") else []
+    st.session_state.open_positions = {}
+    st.session_state.hedge_positions = {}
+    st.session_state.env_mode = run_mode_map.get(bot_config.get("run_mode", "sim"), "○ 测试")
+    st.session_state.strategy_module = "strategy_v2"
+    st.session_state.position_sizes = {
+        "primary": bot_config.get("position_size", 0.05), 
+        "secondary": bot_config.get("position_size", 0.05) / 2
+    }
+    
+    # 设置入场动画标志
+    st.session_state.show_intro_animation = True
+    st.rerun()
+
+
+# 联系方式签名（使用模板）
+CONTACT_FOOTER = MAIN_FOOTER_HTML
+
+
+def render_contact_footer():
+    """渲染联系方式签名（在主界面角落）"""
+    st.markdown(MAIN_FOOTER_HTML, unsafe_allow_html=True)
 
 
 def _render_advanced_strategy_config(strategy_id: str, actions):
@@ -891,7 +602,7 @@ def _render_advanced_strategy_config(strategy_id: str, actions):
     with st.expander("🎯 高级策略参数（动态止盈止损）", expanded=False):
         st.caption("💡 高级策略支持 ATR 动态止损、分批止盈、追踪止损、时间过滤等功能")
         
-        # === 风控参数 ===
+        # 风控参数
         st.markdown("##### 🛡️ 风控参数")
         col1, col2, col3 = st.columns(3)
         
@@ -941,7 +652,7 @@ def _render_advanced_strategy_config(strategy_id: str, actions):
                 key=f"adv_atrsl_{strategy_id}"
             )
         
-        # === 止盈止损参数 ===
+        # 止盈止损参数
         st.markdown("##### 📊 分批止盈参数")
         col_tp1, col_tp2, col_tp3 = st.columns(3)
         
@@ -996,7 +707,7 @@ def _render_advanced_strategy_config(strategy_id: str, actions):
                 key=f"adv_tp3trail_{strategy_id}"
             )
         
-        # === 时间过滤参数 ===
+        # 时间过滤参数
         st.markdown("##### 🕐 时间过滤（UTC）")
         
         enable_time_filter = st.checkbox(
@@ -1043,9 +754,9 @@ def _render_advanced_strategy_config(strategy_id: str, actions):
                     key=f"adv_t2e_{strategy_id}"
                 )
         else:
-            t1_start, t1_end, t2_start, t2_end = 0, 24, 0, 0  # 全天可交易
+            t1_start, t1_end, t2_start, t2_end = 0, 24, 0, 0
         
-        # === 冷却参数 ===
+        # 冷却参数
         st.markdown("##### ⏱️ 冷却参数")
         col_cd1, col_cd2 = st.columns(2)
         
@@ -1069,7 +780,7 @@ def _render_advanced_strategy_config(strategy_id: str, actions):
                 key=f"adv_slcd_{strategy_id}"
             )
         
-        # === 保存按钮 ===
+        # 保存按钮
         if st.button("💾 保存高级策略参数", key=f"save_adv_{strategy_id}"):
             new_config = {
                 'risk_per_trade': risk_per_trade,
@@ -1175,7 +886,7 @@ def _render_sidebar_balance_fragment(actions, view_model):
 def render_sidebar(view_model, actions):
     """渲染侧边栏"""
     with st.sidebar:
-        # ============ 系统标题 - 何以为势 炫光字体 ============
+        # 系统标题
         st.markdown("""
         <style>
         @keyframes glow-pulse {
@@ -1198,15 +909,19 @@ def render_sidebar(view_model, actions):
             flex-direction: column;
             align-items: center;
             padding: 20px 8px;
-            margin-bottom: 15px;
+            margin-bottom: 8px;
             border-bottom: 1px solid rgba(255,255,255,0.1);
         ">
             <div class="glow-title">何以为势</div>
             <div style="color: #718096; font-size: 11px; margin-top: 4px; letter-spacing: 1px;">Quantitative Trading System</div>
         </div>
+        <div style="text-align: center; font-size: 10px; color: rgba(255,255,255,0.4); margin-bottom: 12px; line-height: 1.5;">
+            📧 hey345437@gmail.com | QQ: 3269180865<br>
+            ⚠️ 投资有风险，入市需谨慎 | AGPL-3.0
+        </div>
         """, unsafe_allow_html=True)
         
-        # ============ 后端状态 ============
+        # 后端状态
         engine_status = view_model.get("engine_status", {})
         runner_alive = engine_status.get("alive", 0) == 1
         status_color = "#48bb78" if runner_alive else "#f56565"
@@ -1232,14 +947,11 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # ============  AI 决策交易模式切换 ============
-        # 粉色渐变风格按钮
+        # AI 决策交易模式切换
         arena_mode = st.session_state.get('arena_mode', False)
         
-        # 注入粉色按钮样式
         st.markdown("""
         <style>
-        /* AI 决策交易按钮 - 粉色渐变风格 */
         .ai-arena-btn {
             background: linear-gradient(135deg, #ff6b9d 0%, #c44569 50%, #ff6b9d 100%);
             background-size: 200% 200%;
@@ -1274,7 +986,6 @@ def render_sidebar(view_model, actions):
         .ai-arena-btn-icon {
             font-size: 18px;
         }
-        /* 激活状态 */
         .ai-arena-btn.active {
             background: linear-gradient(135deg, #00d4aa 0%, #00b894 50%, #00d4aa 100%);
             box-shadow: 0 4px 20px rgba(0, 212, 170, 0.4);
@@ -1285,14 +996,12 @@ def render_sidebar(view_model, actions):
         </style>
         """, unsafe_allow_html=True)
         
-        # AI 决策交易切换按钮（简洁版）
         btn_key = "ai_arena_switch_btn"
         
         if st.button("AI 决策交易", key=btn_key, width="stretch", type="primary"):
             st.session_state.arena_mode = True
             st.rerun()
         
-        # 按钮下方注释
         st.markdown("""
         <div style="
             text-align: center;
@@ -1303,7 +1012,7 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # ============ 资产概览 ============
+        # 资产概览
         st.markdown("""
         <div style="
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -1316,14 +1025,12 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # 使用 fragment 实现余额自动刷新
         _render_sidebar_balance_fragment(actions, view_model)
         
-        # 初始化必要的session_state变量
         if "strategy_module" not in st.session_state:
             st.session_state.strategy_module = "strategy"
         if "env_mode" not in st.session_state:
-            st.session_state.env_mode = "● 实盘"  # 默认实盘
+            st.session_state.env_mode = "● 实盘"
         
         # 环境模式切换(session_state.env_mode 为 UI 缓存, DB 为权威)
         st.markdown("""
@@ -1504,12 +1211,19 @@ def render_sidebar(view_model, actions):
         if selected_strategy_tuple[1] != st.session_state.get('selected_strategy_id'):
             st.session_state.selected_strategy_id = selected_strategy_tuple[1]
         
-        # ============ ◈ AI 策略助手入口 ============
-        if st.button("◈ AI 策略助手", key="strategy_builder_btn", use_container_width=True):
-            st.session_state.strategy_builder_mode = True
-            st.rerun()
+        # AI 策略助手入口 / 返回按钮
+        if st.session_state.get('strategy_builder_mode', False):
+            # 当前在策略助手模式，显示返回按钮
+            if st.button("← 返回主界面", key="sidebar_back_to_main", use_container_width=True, type="primary"):
+                st.session_state.strategy_builder_mode = False
+                st.rerun()
+        else:
+            # 正常模式，显示进入策略助手按钮
+            if st.button("◈ AI 策略助手", key="strategy_builder_btn", use_container_width=True):
+                st.session_state.strategy_builder_mode = True
+                st.rerun()
         
-        # ============  双 Key API 配置面板 ============
+        # 双 Key API 配置面板
         st.markdown("""
         <div style="
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -1522,7 +1236,6 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # 导入配置管理器
         try:
             from core.config_manager import get_config_manager, save_api_credentials, get_api_status, mask_key
             config_mgr = get_config_manager()
@@ -1536,7 +1249,6 @@ def render_sidebar(view_model, actions):
             if not HAS_CONFIG_MANAGER:
                 st.error("❌ config_manager 模块未找到")
             else:
-                # 显示当前状态
                 st.markdown("##### 当前配置状态")
                 col_trade, col_market = st.columns(2)
                 
@@ -1559,7 +1271,7 @@ def render_sidebar(view_model, actions):
                 
                 st.divider()
                 
-                # ============ 交易专用 Key ============
+                # 交易专用 Key
                 st.markdown("##### 交易专用 Key（用于下单）")
                 st.caption("需要交易权限，用于策略下单、撤单、查询持仓")
                 
@@ -1584,7 +1296,7 @@ def render_sidebar(view_model, actions):
                 
                 st.divider()
                 
-                # ============ 行情专用 Key ============
+                # 行情专用 Key
                 st.markdown("##### 📈 行情专用 Key（可选，推荐）")
                 st.caption("建议只读权限，用于 K线图、实时行情，与交易接口隔离避免 Rate Limit 冲突")
                 
@@ -1609,10 +1321,9 @@ def render_sidebar(view_model, actions):
                 
                 st.divider()
                 
-                # ============ 保存按钮 ============
+                # 保存按钮
                 def _save_dual_key_config():
                     """保存双 Key 配置"""
-                    # 读取输入值
                     t_key = st.session_state.get('ui_trade_key_input', '')
                     t_secret = st.session_state.get('ui_trade_secret_input', '')
                     t_pass = st.session_state.get('ui_trade_passphrase_input', '')
@@ -1620,7 +1331,6 @@ def render_sidebar(view_model, actions):
                     m_secret = st.session_state.get('ui_market_secret_input', '')
                     m_pass = st.session_state.get('ui_market_passphrase_input', '')
                     
-                    # 检查是否有输入
                     has_trade_input = bool(t_key or t_secret or t_pass)
                     has_market_input = bool(m_key or m_secret or m_pass)
                     
@@ -1628,7 +1338,6 @@ def render_sidebar(view_model, actions):
                         st.session_state._dual_key_save_empty = True
                         return
                     
-                    # 保存到配置管理器
                     try:
                         success = save_api_credentials(
                             trade_key=t_key if t_key else None,
@@ -1641,7 +1350,6 @@ def render_sidebar(view_model, actions):
                         
                         if success:
                             st.session_state._dual_key_save_success = True
-                            # 同时更新数据库配置（兼容旧逻辑）
                             if t_key:
                                 actions.get("update_bot_config", lambda **kw: None)(okx_api_key=t_key)
                             if t_secret:
@@ -1771,8 +1479,61 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # 从数据库获取当前交易参数
         bot_config = actions.get("get_bot_config", lambda: {})()
+        
+        # 扫描周期配置
+        import json
+        ALL_TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1D']
+        DEFAULT_TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h']
+        
+        scan_tf_json = bot_config.get('scan_timeframes', '[]')
+        try:
+            current_scan_tfs = json.loads(scan_tf_json) if scan_tf_json else DEFAULT_TIMEFRAMES
+        except:
+            current_scan_tfs = DEFAULT_TIMEFRAMES
+        
+        with st.expander("(・ω・) 扫描周期设置", expanded=False):
+            st.caption("选择需要扫描的时间周期")
+            
+            selected_tfs = st.multiselect(
+                "选择扫描周期",
+                options=ALL_TIMEFRAMES,
+                default=[tf for tf in current_scan_tfs if tf in ALL_TIMEFRAMES],
+                help="勾选需要扫描的周期，取消勾选的周期不会被扫描"
+            )
+            
+            if st.button("(≧▽≦) 保存周期", key="save_scan_tf"):
+                if not selected_tfs:
+                    st.warning("(・_・;) 至少选择一个周期")
+                else:
+                    try:
+                        actions.get("update_bot_config", lambda **kwargs: None)(
+                            scan_timeframes=json.dumps(selected_tfs)
+                        )
+                        actions.get("set_control_flags", lambda **kwargs: None)(reload_config=1)
+                        st.success(f"(◕‿◕) 扫描周期已保存: {', '.join(selected_tfs)}")
+                    except Exception as e:
+                        st.error(f"保存失败: {str(e)[:50]}")
+            
+            # 说明信息
+            st.markdown("""
+            <div style="
+                background: rgba(255, 193, 7, 0.1);
+                border-left: 3px solid #ffc107;
+                padding: 10px;
+                margin-top: 10px;
+                border-radius: 4px;
+                font-size: 12px;
+            ">
+                <b>(・ω・) 说明</b><br>
+                • 必须勾选至少一个周期才能正常扫描信号<br>
+                • 策略只会在勾选的周期上产生信号<br>
+                • 建议根据策略特性选择合适的周期<br>
+                • <b>实时策略</b>请在侧边栏切换到 WebSocket 模式
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.caption(f"当前扫描: {', '.join(selected_tfs) if selected_tfs else '无'}")
         current_leverage = bot_config.get('leverage', 20)
         current_main_pct = bot_config.get('main_position_pct', 0.03)
         current_sub_pct = bot_config.get('sub_position_pct', 0.01)
@@ -1947,8 +1708,7 @@ def render_sidebar(view_model, actions):
             else:
                 st.caption(f"当前: {new_leverage}x杠杆 | 最大仓位{new_max_pos_pct*100:.0f}% | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}% | 对冲{new_hedge_pct*100:.1f}%")
         
-        # ============ 高级策略配置面板 ============
-        # 检查是否是高级策略（支持动态止盈止损）
+        # 高级策略配置面板
         try:
             from strategies.strategy_registry import is_advanced_strategy, get_strategy_risk_config
             is_advanced = is_advanced_strategy(current_strategy_id)
@@ -1958,7 +1718,7 @@ def render_sidebar(view_model, actions):
         if is_advanced:
             _render_advanced_strategy_config(current_strategy_id, actions)
         
-        # ============  数据源模式选择器 ============
+        # 数据源模式选择器
         st.markdown("""
         <div style="
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
@@ -1971,7 +1731,6 @@ def render_sidebar(view_model, actions):
         </div>
         """, unsafe_allow_html=True)
         
-        # 从数据库读取数据源模式（持久化）
         if "data_source_mode" not in st.session_state:
             try:
                 bot_config = actions.get("get_bot_config", lambda: {})()
@@ -1980,7 +1739,6 @@ def render_sidebar(view_model, actions):
             except Exception:
                 st.session_state.data_source_mode = "REST"
         
-        # 数据源模式选项
         DATA_SOURCE_MODES = {
             "REST": "○ REST 轮询",
             "WebSocket": "● WebSocket"
@@ -1991,7 +1749,6 @@ def render_sidebar(view_model, actions):
             sel = st.session_state.get('data_source_selector')
             if sel:
                 st.session_state.data_source_mode = sel
-                # 写入数据库配置
                 try:
                     actions.get("update_bot_config", lambda **kw: None)(data_source_mode=sel)
                     actions.get("set_control_flags", lambda **kw: None)(reload_config=1)
@@ -2016,17 +1773,37 @@ def render_sidebar(view_model, actions):
         if st.session_state.data_source_mode == "REST":
             st.caption("📌 收盘信号策略推荐，每分钟00秒扫描，稳定可靠")
         else:
-            st.caption(" 实时信号策略推荐，毫秒级推送，适合突破/动量策略")
+            st.caption("⚡ 实时信号策略推荐，毫秒级推送，适合突破/动量策略")
             # 显示 WebSocket 连接状态
             try:
                 from database.db_bridge import get_ws_status
                 ws_status = get_ws_status()
                 if ws_status and ws_status.get('connected'):
-                    st.success(" WebSocket 已连接")
+                    st.success("(◕‿◕) WebSocket 已连接")
                 else:
-                    st.warning("⏳ WebSocket 连接中...")
+                    st.warning("(・_・;) WebSocket 连接中...")
             except ImportError:
                 pass
+        
+        # 数据源模式说明
+        with st.expander("(・ω・) 数据源模式说明", expanded=False):
+            st.markdown("""
+            **REST 轮询模式**
+            - 每分钟00秒扫描一次
+            - 使用已收盘的K线数据
+            - 适合：均线交叉、MACD、RSI 等趋势策略
+            - 优点：信号稳定，不会假突破
+            
+            **WebSocket 实时模式**
+            - 毫秒级实时推送
+            - 使用最新的价格数据
+            - 适合：突破策略、动量策略、网格策略
+            - 优点：响应快，抓住瞬间机会
+            
+            **💡 如何选择？**
+            - 新手建议使用 REST 模式
+            - 策略需要实时价格时切换 WebSocket
+            """)
         
         # 资产概览已移至侧边栏顶部, 此处不再重复显示
         # API 隔离状态已整合到"API 密钥管理"面板中
@@ -2074,7 +1851,7 @@ def _render_kline_chart(view_model, actions):
         st.info("请先在侧边栏配置交易池")
         return
     
-    timeframes = ['1m', '3m', '5m', '15m', '30m', '1h']
+    timeframes = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1D']
     
     # 控制栏（固定自动刷新，无手动刷新按钮）
     col_sym, col_tf, col_interval, col_status = st.columns([3, 1, 1, 1])
@@ -2801,8 +2578,7 @@ def render_dashboard(view_model, actions):
     # 主页面布局
     col_main, col_right = st.columns([7, 3])
     
-    # ========== 右侧装饰图片（固定在右侧，半渐变融入黑色背景） ==========
-    # 使用固定定位，不占用列空间
+    # 右侧装饰图片
     st.markdown("""
     <style>
     /* 右侧装饰图片容器 - 固定定位覆盖右侧空白区域 */
@@ -3110,37 +2886,17 @@ def render_dashboard(view_model, actions):
             
             st.divider()
         
-        # 情绪接口显示
+        # 情绪模块 - expander 展开时加载，fragment 局部刷新
         st.markdown("#### ◇ 市场情绪")
-        with st.expander("情绪分析", expanded=False):
-            @st.cache_data(ttl=60)
-            def fetch_sentiment():
-                try:
-                    response = requests.get("https://api.alternative.me/fng/")
-                    data = response.json()
-                    return data["data"][0]["value"], data["data"][0]["value_classification"]
-                except Exception as e:
-                    st.error(f"情绪API请求失败: {str(e)[:30]}...")
-                    return "----", "未知"
-            fear_value, fear_level = fetch_sentiment()
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("恐惧与贪婪指数", fear_value)
-            with col2:
-                st.metric("情绪水平", fear_level)
-            
-            if fear_value != "----":
-                try:
-                    fear_num = int(fear_value)
-                    if fear_num <= 20:
-                        st.warning("市场处于极度恐惧状态, 可能是买入机会")
-                    elif fear_num >= 80:
-                        st.warning("市场处于极度贪婪状态, 可能是卖出机会")
-                    else:
-                        st.info("市场情绪较为中性")
-                except ValueError:
-                    pass
+        with st.expander("情绪分析 & 新闻 & 链上数据", expanded=False):
+            from ui.ui_sentiment import _render_sentiment_tab, _render_news_tab_fragment, _render_onchain_tab_fragment
+            tab1, tab2, tab3 = st.tabs(["◈ 情绪指数", "◈ 新闻流", "◈ 链上数据"])
+            with tab1:
+                _render_sentiment_tab()
+            with tab2:
+                _render_news_tab_fragment()
+            with tab3:
+                _render_onchain_tab_fragment()
 
 
 def render_main(view_model, actions):
@@ -3148,9 +2904,7 @@ def render_main(view_model, actions):
     # 注意: set_page_config 已在 app.py 中调用，此处不再重复调用
     # 否则会导致 StreamlitAPIException: set_page_config() can only be called once
     
-    # ============ 自动刷新机制 ============
-    # 移除全局 st_autorefresh，改用 @st.fragment 局部刷新
-    # 这样可以避免整个页面重绘，只刷新需要更新的组件
+    # 使用 @st.fragment 局部刷新，避免整个页面重绘
     # 实盘监控卡片和 K线图各自独立刷新，互不影响
     
     # 确保必要的session_state变量存在

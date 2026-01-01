@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -198,7 +198,7 @@ class AIDBManager:
                     """, (agent, int(time.time() * 1000)))
                 
                 conn.commit()
-                logger.info(f"[AIDBManager] 数据库初始化完成: {self.db_path}")
+                logger.debug(f"[AIDBManager] 数据库初始化完成: {self.db_path}")
     
     # ========== 决策记录 ==========
     

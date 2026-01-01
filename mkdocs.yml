@@ -1,0 +1,35 @@
+site_name: 何以为势 文档
+site_description: 中文优先的 AI 量化交易系统
+site_author: HyWeiShi
+repo_url: https://github.com/your-username/hyweishi
+
+theme:
+  name: material
+  language: zh
+  palette:
+    primary: indigo
+    accent: amber
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+
+nav:
+  - 首页: index.md
+  - 快速开始:
+    - 部署指南: deployment.md
+  - 开发:
+    - 架构设计: architecture.md
+    - 策略开发: strategies.md
+    - API 参考: api/index.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - admonition
+  - toc:
+      permalink: true
+
+plugins:
+  - search

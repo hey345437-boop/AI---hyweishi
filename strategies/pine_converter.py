@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 """
@@ -332,6 +332,4 @@ class {class_name}:
         return '''        signal = "wait"
         confidence = 0
         reason = ""
-        
-        # TODO: 根据指标添加信号逻辑
         '''

@@ -10,10 +10,9 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
-# ============================================================================
 # ============================================================================
 """
 主应用入口 - Streamlit Web UI
@@ -53,13 +52,11 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # dotenv 未安装，跳过
+    pass
 
-# ============ 启动前检查（简化版）============
-# 只检查关键依赖，配置通过前端 UI 输入
+# 启动前检查
 try:
     from utils.startup_validator import StartupValidator
-    # 只检查 Python 包，跳过配置和数据库检查
     pkg_ok, missing_req, missing_opt = StartupValidator.check_packages(verbose=False)
     if not pkg_ok:
         st.error("❌ 启动检查失败")
@@ -67,10 +64,8 @@ try:
         st.info("请运行: pip install -r requirements.txt")
         st.stop()
 except ImportError:
-    # startup_validator 不存在，跳过检查
     pass
 except Exception as e:
-    # 其他异常，记录但不阻止启动
     print(f"启动检查警告: {e}")
 
 # 导入项目模块
@@ -126,7 +121,6 @@ try:
 except ImportError:
     HAS_AUTOREFRESH = False
 
-# ============ 辅助函数 ============
 
 def get_env_config(env_mode):
     """根据运行模式获取环境配置
@@ -178,10 +172,8 @@ def save_user_state(username):
 
 def manual_scan(symbols, timeframe):
     """手动扫描策略信号"""
-    # 这里应该调用策略引擎进行扫描
     return []
 
-# ============ 主页面 ============
 
 def main():
     """交易系统控制面板主函数"""

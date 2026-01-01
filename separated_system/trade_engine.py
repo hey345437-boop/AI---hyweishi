@@ -10,8 +10,8 @@
 #                         何 以 为 势
 #                  Quantitative Trading System
 #
-#   Copyright (c) 2024-2025 HeWeiShi. All Rights Reserved.
-#   License: Apache License 2.0
+#   Copyright (c) 2024-2025 HyWeiShi. All Rights Reserved.
+#   License: AGPL-3.0
 #
 # ============================================================================
 # ============================================================================
@@ -64,7 +64,7 @@ if sys.platform.startswith('win'):
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 辅助函数：获取当前分钟需要处理的周期（收线确认模式）
-def get_due_timeframes(current_minute: int, timeframes: List[str]) -> List[str]:
+def get_due_timeframes(current_minute: int, timeframes: List[str], current_hour: int = 0) -> List[str]:
     """
     返回已收盘的周期列表（收线确认模式）
     
@@ -75,6 +75,8 @@ def get_due_timeframes(current_minute: int, timeframes: List[str]) -> List[str]:
     - 若minute % 15 == 0：额外扫15m
     - 若minute % 30 == 0：额外扫30m
     - 若minute == 0：额外扫1h
+    - 若minute == 0 且 hour % 4 == 0：额外扫4h
+    - 若minute == 0 且 hour == 0：额外扫1D（UTC 0点）
     
     与59秒模式的区别：
     - 59秒模式：在K线收盘前1秒触发，使用"即将收盘"的K线
@@ -105,6 +107,15 @@ def get_due_timeframes(current_minute: int, timeframes: List[str]) -> List[str]:
     # 1h周期：当前分钟是0分（1h K线刚收盘）
     if '1h' in timeframes and current_minute == 0:
         due_tfs.append('1h')
+    
+    # 4h周期：当前分钟是0分，且小时是0,4,8,12,16,20（4h K线刚收盘）
+    if '4h' in timeframes and current_minute == 0 and current_hour % 4 == 0:
+        due_tfs.append('4h')
+    
+    # 1D周期：当前分钟是0分，且小时是0（UTC 0点，日K线刚收盘）
+    # 注意：OKX 使用 1Dutc，需要在调用时转换
+    if '1D' in timeframes and current_minute == 0 and current_hour == 0:
+        due_tfs.append('1D')
     
     return due_tfs
 
@@ -977,8 +988,27 @@ def main():
     cycle_id = 0  # 初始化周期ID
     last_trigger_minute = -1  # 初始化上次触发的分钟，用于每分钟末扫描调度
     
-    # 定义支持的时间周期
-    supported_timeframes = ['1m', '3m', '5m', '15m', '30m', '1h']
+    # 定义所有支持的时间周期
+    ALL_TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1D']
+    DEFAULT_TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h']
+    
+    # 从数据库读取用户配置的扫描周期
+    def get_configured_timeframes() -> list:
+        """从数据库读取用户配置的扫描周期"""
+        try:
+            config = get_bot_config()
+            scan_tf_json = config.get('scan_timeframes', '[]')
+            if scan_tf_json:
+                tfs = json.loads(scan_tf_json)
+                # 过滤无效周期
+                return [tf for tf in tfs if tf in ALL_TIMEFRAMES] or DEFAULT_TIMEFRAMES
+        except:
+            pass
+        return DEFAULT_TIMEFRAMES
+    
+    # 初始化扫描周期
+    supported_timeframes = get_configured_timeframes()
+    logger.info(f"[Engine] 扫描周期配置: {supported_timeframes}")
     
     # 后台余额同步器 (Pre-Flight Check)
     # 独立线程在每分钟的 30秒、55秒 预先检查余额和风控
@@ -1577,8 +1607,8 @@ def main():
                 # WebSocket 实时模式：只扫描 1m 周期（实时信号策略通常只关注最短周期）
                 due_timeframes = ['1m']
             else:
-                # REST 整点扫描模式：根据当前分钟确定需要扫描的周期
-                due_timeframes = get_due_timeframes(now.minute, supported_timeframes)
+                # REST 整点扫描模式：根据当前分钟和小时确定需要扫描的周期
+                due_timeframes = get_due_timeframes(now.minute, supported_timeframes, now.hour)
             
             if not due_timeframes:
                 continue
@@ -2089,6 +2119,13 @@ def main():
                             pass
                     
                     last_config_updated_at = new_bot_config.get('updated_at', 0)
+                    
+                    # 热加载扫描周期配置
+                    new_scan_tfs = get_configured_timeframes()
+                    if new_scan_tfs != supported_timeframes:
+                        supported_timeframes = new_scan_tfs
+                        logger.info(f"[Engine] 扫描周期已更新: {supported_timeframes}")
+                    
                     set_control_flags(reload_config=0)
                 except Exception as e:
                     logger.error(f"配置重载失败: {e}")
@@ -2225,12 +2262,15 @@ def main():
                     max_retries = 2
                     last_error = None
                     
+                    # 日线格式转换：1D -> 1Dutc（与 TradingView 对齐）
+                    actual_tf = normalize_daily_timeframe(tf)
+                    
                     for attempt in range(max_retries + 1):
                         try:
                             # REST 数据源
                             if provider is not None:
                                 ohlcv_data, is_stale = provider.get_ohlcv(
-                                    symbol, timeframe=tf, limit=1000
+                                    symbol, timeframe=actual_tf, limit=1000
                                 )
                                 return symbol, tf, ohlcv_data, is_stale, None
                             else:
@@ -2258,9 +2298,9 @@ def main():
                     # 异步并发模式：真正的并发，耗时 < 1 秒
                     logger.debug("[scan] 使用异步并发获取模式")
                     
-                    # 构建异步任务列表
+                    # 构建异步任务列表（日线格式转换：1D -> 1Dutc）
                     async_tasks = [
-                        (symbol, tf, 50)  # (symbol, timeframe, limit)
+                        (symbol, normalize_daily_timeframe(tf), 50)  # (symbol, timeframe, limit)
                         for symbol in current_symbols
                         for tf in due_timeframes
                     ]
@@ -2282,11 +2322,18 @@ def main():
                         max_concurrent=20,
                     )
                     
-                    # 处理异步结果
-                    for (sym, tf), ohlcv_data in async_results.items():
+                    # 处理异步结果（需要将 1Dutc 映射回 1D）
+                    for (sym, actual_tf), ohlcv_data in async_results.items():
+                        # 将 1Dutc 映射回 1D（用于存储和后续处理）
+                        tf = '1D' if actual_tf == '1Dutc' else actual_tf
+                        
                         if ohlcv_data and len(ohlcv_data) > 0:
                             # 计算该周期的期望K线时间戳
-                            tf_ms = {'1m': 60000, '3m': 180000, '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000}.get(tf, 60000)
+                            tf_ms = {
+                                '1m': 60000, '3m': 180000, '5m': 300000, 
+                                '15m': 900000, '30m': 1800000, '1h': 3600000,
+                                '4h': 14400000, '1D': 86400000, '1Dutc': 86400000
+                            }.get(tf, 60000)
                             expected_tf_ts = ((current_minute_ts // tf_ms) * tf_ms) - tf_ms
                             latest_candle_ts = ohlcv_data[-1][0]
                             is_lag = latest_candle_ts < expected_tf_ts
@@ -2525,9 +2572,8 @@ def main():
                         continue
                     
                     # 检查止损（自定义策略使用）
-                    # 判断当前策略是否是自定义策略
                     try:
-                        from strategy_registry import is_custom_strategy
+                        from strategies.strategy_registry import is_custom_strategy
                         is_custom = is_custom_strategy(strategy_id)
                     except ImportError:
                         is_custom = strategy_id not in ['strategy_v1', 'strategy_v2']
@@ -2842,16 +2888,12 @@ def main():
                         # CLOSE_LONG = 平多仓，CLOSE_SHORT = 平空仓
                         close_side = 'long' if signal_upper == 'CLOSE_LONG' else 'short'
                         
-                        # 检查是否有对应方向的主仓需要平
                         if main_pos and main_pos.get('pos_side', '').lower() == close_side:
-                            # 有对应方向的主仓，执行平仓（这里只记录信号，实际平仓由止盈逻辑处理）
                             logger.info(f"[CLOSE] {symbol} 收到平仓信号 {signal_upper}，主仓方向 {close_side}")
-                            # TODO: 可以在这里添加平仓逻辑
                         else:
                             logger.debug(f"[skip] {symbol} 收到 {signal_upper} 但无对应方向主仓，跳过")
-                        continue  # 平仓信号不开新仓
+                        continue
                     
-                    # 只处理开仓信号：LONG/SHORT
                     if signal_upper not in ('LONG', 'SHORT'):
                         logger.debug(f"[skip] {symbol} 未知信号类型 {signal_action}，跳过")
                         continue
