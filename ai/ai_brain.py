@@ -284,12 +284,17 @@ class BaseAgent(ABC):
             user_style = user_prompt if user_prompt else "均衡策略，追求稳定收益"
             system_prompt = SYSTEM_PROMPT_TEMPLATE.format(user_style_prompt=user_style)
         
-        # 最近 K 线数据（最多 10 根）
-        recent = context.ohlcv[-10:] if len(context.ohlcv) >= 10 else context.ohlcv
-        candles_text = "\n".join([
-            f"  [{i+1}] ts:{c[0]} O:{c[1]:.2f} H:{c[2]:.2f} L:{c[3]:.2f} C:{c[4]:.2f} V:{c[5]:.2f}"
-            for i, c in enumerate(recent)
-        ])
+        # K 线摘要（替代原始 OHLCV 数据，更紧凑）
+        try:
+            from ai.ai_state_tracker import format_candles_summary
+            candles_text = format_candles_summary(context.ohlcv, count=10)
+        except ImportError:
+            # 回退到原始格式
+            recent = context.ohlcv[-10:] if len(context.ohlcv) >= 10 else context.ohlcv
+            candles_text = "\n".join([
+                f"  [{i+1}] ts:{c[0]} O:{c[1]:.2f} H:{c[2]:.2f} L:{c[3]:.2f} C:{c[4]:.2f} V:{c[5]:.2f}"
+                for i, c in enumerate(recent)
+            ])
         
         # 构建情绪分析部分（增强版：包含新闻分析）
         sentiment_section = ""

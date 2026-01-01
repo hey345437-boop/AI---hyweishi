@@ -47,6 +47,13 @@ from .ai_indicators import (
     calc_kdj,
     calc_atr
 )
+from .ai_state_tracker import (
+    StateTracker,
+    get_state_tracker,
+    format_with_changes,
+    format_candles_summary,
+    MarketState
+)
 from .ai_trade_bridge import (
     AITradeBridge,
     AITradeSignal,
@@ -72,6 +79,8 @@ __all__ = [
     # ai_indicators
     'IndicatorCalculator', 'get_ai_indicators', 'get_batch_ai_indicators',
     'calc_ma', 'calc_ema', 'calc_rsi', 'calc_macd', 'calc_boll', 'calc_kdj', 'calc_atr',
+    # ai_state_tracker
+    'StateTracker', 'get_state_tracker', 'format_with_changes', 'format_candles_summary', 'MarketState',
     # ai_trade_bridge
     'AITradeBridge', 'AITradeSignal', 'AITradeResult', 'AITradeMode',
     'get_ai_trade_bridge', 'execute_ai_signal',

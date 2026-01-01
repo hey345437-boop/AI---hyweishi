@@ -857,17 +857,35 @@ class IndicatorCalculator:
         return latest
     
     @staticmethod
-    def format_for_ai(latest_values: Dict[str, Any], symbol: str, timeframe: str) -> str:
+    def format_for_ai(
+        latest_values: Dict[str, Any], 
+        symbol: str, 
+        timeframe: str,
+        ohlcv: List[List] = None
+    ) -> str:
         """
-        将指标值格式化为 AI 可读的文本
+        将指标值格式化为 AI 可读的文本（带变化量）
         
         参数:
             latest_values: 指标最新值字典
             symbol: 交易对
             timeframe: 时间周期
+            ohlcv: K线数据（用于状态分析）
         返回:
             格式化的文本
         """
+        # 尝试使用增强版格式化（带变化量）
+        try:
+            from ai.ai_state_tracker import format_with_changes
+            current_price = latest_values.get('_price', 0)
+            if not current_price and ohlcv:
+                current_price = ohlcv[-1][4]  # 最后一根 K 线的收盘价
+            if current_price:
+                return format_with_changes(latest_values, symbol, timeframe, current_price, ohlcv)
+        except (ImportError, Exception) as e:
+            logger.debug(f"使用原始格式化: {e}")
+        
+        # 回退到原始格式
         lines = [f"## {symbol} 技术指标 ({timeframe})", ""]
         
         # 趋势指标
@@ -947,7 +965,7 @@ def get_ai_indicators(
             'symbol': str,
             'timeframe': str,
             'latest': {indicator: value, ...},
-            'formatted': str,  # AI 可读的格式化文本
+            'formatted': str,  # AI 可读的格式化文本（带变化量）
             'timestamp': int
         }
     """
@@ -955,8 +973,19 @@ def get_ai_indicators(
         indicators = IndicatorCalculator.SUPPORTED_INDICATORS
     
     calculator = IndicatorCalculator(api_base_url)
-    latest = calculator.fetch_latest_values(indicators, symbol, timeframe, limit)
-    formatted = calculator.format_for_ai(latest, symbol, timeframe)
+    
+    # 获取 OHLCV 数据
+    ohlcv = calculator.data_source.fetch_ohlcv(symbol, timeframe, limit)
+    
+    # 计算指标
+    if ohlcv:
+        latest = calculator.get_latest_values(indicators, ohlcv)
+        # 添加当前价格供状态追踪使用
+        latest['_price'] = ohlcv[-1][4] if ohlcv else 0
+        formatted = calculator.format_for_ai(latest, symbol, timeframe, ohlcv)
+    else:
+        latest = {ind: None for ind in indicators}
+        formatted = f"## {symbol} 数据获取失败"
     
     return {
         'symbol': symbol,
