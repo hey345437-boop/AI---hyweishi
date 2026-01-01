@@ -58,7 +58,7 @@ class MarketDataSource:
         """懒加载 MarketDataProvider（AI 专用实例）"""
         if self._provider is None:
             try:
-                from market_data_provider import create_market_data_provider_with_dedicated_key
+                from core.market_data_provider import create_market_data_provider_with_dedicated_key
                 self._provider = create_market_data_provider_with_dedicated_key(
                     timeframe='5m',  # 默认周期
                     ohlcv_limit=1000,  # 目标 1000 根 K 线
