@@ -1,24 +1,31 @@
-# 何以为势 (HyWeiShi)
+# 🚀 何以为势 (HyWeiShi)
 
 <div align="center">
 
-```
- _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
-| | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
-| |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
-|  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
-|_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
-```
+<img src="https://img.shields.io/badge/AI-Powered-blueviolet?style=for-the-badge&logo=openai&logoColor=white" alt="AI Powered"/>
+<img src="https://img.shields.io/badge/Crypto-Futures-orange?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Crypto Futures"/>
+<img src="https://img.shields.io/badge/Trading-Bot-success?style=for-the-badge&logo=robot&logoColor=white" alt="Trading Bot"/>
 
-**智能量化交易系统 | Quantitative Trading System**
+<br/><br/>
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
+**🔮 AI 驱动的加密货币合约交易引擎**
 
-中文 | [English](README.en.md)
+*让 AI 成为你的交易搭档，洞察市场先机*
+
+<br/>
+
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg?style=flat-square)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![OKX](https://img.shields.io/badge/OKX-Supported-000000.svg?style=flat-square)](https://www.okx.com/)
+
+<br/>
+
+[中文文档](#功能特性) | [English](README.en.md) | [快速开始](#快速开始) | [AI 模型](#支持的-ai-模型)
 
 </div>
+
+<br/>
 
 ---
 
@@ -37,13 +44,35 @@
 
 ## 功能特性
 
-- **多策略支持** - 内置多种交易策略，支持自定义策略开发
-- **AI 决策辅助** - 集成 DeepSeek/通义千问等大模型，提供智能分析
-- **可视化界面** - 基于 Streamlit 的 Web UI，实时监控交易状态
-- **风控系统** - 完善的止损止盈、仓位管理、风险控制
+### 🤖 AI 智能决策
+- **12+ AI 服务商** - DeepSeek、通义千问、GPT-5、Claude 4.5、Gemini 3 等最新模型
+- **AI 竞技场** - 多个 AI 模型同时分析，投票决策，提高准确率
+- **5 种交易人设** - 猎人型/均衡型/僧侣型/闪电型/冲浪型，适应不同风格
+- **自定义提示词** - 完全自定义 AI 人设和交易策略，打造专属交易员
+- **智能新闻分析** - AI 自动解读市场新闻，生成交易信号
+
+### 📊 技术分析
+- **多时间周期** - 支持 1m/5m/15m/1h/4h/1d 等多周期分析
+- **丰富指标** - MA/EMA/RSI/MACD/KDJ/BOLL/ATR/OBV/VWAP 等
+- **变化量追踪** - 指标变化趋势可视化，AI 更好理解市场动态
 - **双通道信号** - 多时间周期信号确认机制
-- **模拟交易** - 支持 Paper Trading，零风险测试策略
-- **OKX 集成** - 深度集成 OKX 交易所 API
+
+### 💹 交易功能
+- **OKX 合约交易** - 深度集成 OKX 永续合约 API
+- **模拟交易** - Paper Trading 模式，零风险测试策略
+- **风控系统** - 止损止盈、仓位管理、每日亏损限制
+- **多策略支持** - 内置策略 + 自定义策略开发
+- **更多交易所** - 后续将支持 Binance、Bybit 等主流交易所
+
+### 📈 市场情绪
+- **恐惧贪婪指数** - 实时市场情绪监控
+- **多空比分析** - 智能解读多空比变化
+- **链上数据** - 大户动向、交易所流入流出
+
+### 🖥️ 用户界面
+- **Web UI** - 基于 Streamlit 的现代化界面
+- **实时监控** - 持仓、收益、信号实时更新
+- **一键部署** - Docker 支持，Windows/Linux/macOS 全平台
 
 ---
 
@@ -117,9 +146,38 @@ hyweishi-trading-bot/
 
 ---
 
+## 支持的 AI 模型
+
+| 服务商 | 模型版本 | 免费额度 | 备注 |
+|--------|---------|---------|------|
+| DeepSeek | V3.1 Chat, R1 Reasoner | ✅ | 国产高性能，推荐 |
+| 通义千问 | Qwen 3 (235B), QwQ Plus | ✅ | 阿里云，深度思考 |
+| 讯飞星火 | Spark 4.0 Ultra | ✅ Lite | 科大讯飞 |
+| 腾讯混元 | Turbo Latest | ✅ Lite | 256K 上下文 |
+| 火山豆包 | Doubao 1.5 Pro/Seed 1.6 | ✅ | 字节跳动 |
+| 智谱 GLM | GLM-4.6, GLM-4 Plus | ✅ Flash | 国产领先 |
+| OpenAI | GPT-5.2, o3, o4-mini | ❌ | 最新旗舰 |
+| Claude | Claude 4.5 Sonnet/Opus | ❌ | Anthropic |
+| Gemini | Gemini 3 Pro, 2.5 Flash | ✅ | Google |
+| Grok | Grok 4, Grok 3 | ❌ | xAI |
+| Perplexity | Sonar Pro, Reasoning | ❌ | 联网搜索 |
+
+---
+
 ## 许可证
 
 [AGPL-3.0](LICENSE)
+
+---
+
+## 支持项目
+
+如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
+
+**加密货币捐赠：**
+- BTC: `待填写`
+- ETH/USDT (ERC20): `待填写`
+- USDT (TRC20): `待填写`
 
 ---
 

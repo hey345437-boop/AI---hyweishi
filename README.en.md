@@ -1,24 +1,31 @@
-# HyWeiShi (何以为势)
+# 🚀 HyWeiShi (何以为势)
 
 <div align="center">
 
-```
- _   _  __   __ __        __  _____ ___  ____   _   _  ___ 
-| | | | \ \ / / \ \      / / | ____||_ _|/ ___| | | | ||_ _|
-| |_| |  \ V /   \ \ /\ / /  |  _|   | | \___ \ | |_| | | | 
-|  _  |   | |     \ V  V /   | |___  | |  ___) ||  _  | | | 
-|_| |_|   |_|      \_/\_/    |_____||___||____/ |_| |_||___|
-```
+<img src="https://img.shields.io/badge/AI-Powered-blueviolet?style=for-the-badge&logo=openai&logoColor=white" alt="AI Powered"/>
+<img src="https://img.shields.io/badge/Crypto-Futures-orange?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Crypto Futures"/>
+<img src="https://img.shields.io/badge/Trading-Bot-success?style=for-the-badge&logo=robot&logoColor=white" alt="Trading Bot"/>
 
-**AI-Powered Quantitative Trading System**
+<br/><br/>
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-red.svg)](https://streamlit.io/)
+**🔮 AI-Powered Cryptocurrency Futures Trading Engine**
 
-[中文文档](README.md) | English
+*Let AI be your trading partner, seize market opportunities*
+
+<br/>
+
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg?style=flat-square)](LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B.svg?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![OKX](https://img.shields.io/badge/OKX-Supported-000000.svg?style=flat-square)](https://www.okx.com/)
+
+<br/>
+
+[中文文档](README.md) | [English](#features) | [Quick Start](#quick-start) | [AI Models](#supported-ai-models)
 
 </div>
+
+<br/>
 
 ---
 
@@ -37,14 +44,35 @@
 
 ## Features
 
-- **Multi-Strategy Support** - Built-in strategies + custom strategy development
-- **AI Decision Engine** - 12+ LLM providers (DeepSeek, Qwen, GPT, Claude, Gemini...)
-- **AI Arena** - Multiple AI models compete in real-time trading decisions
-- **Risk Control** - Order limits, daily loss limits, paper trading mode
-- **Market Sentiment** - Fear & Greed Index, news analysis, on-chain data
-- **OKX Integration** - Live and paper trading modes
-- **Web UI** - Streamlit-based dashboard for monitoring and control
-- **One-Click Deploy** - Docker support, simple installation scripts
+### 🤖 AI-Powered Trading
+- **12+ AI Providers** - DeepSeek, Qwen 3, GPT-5, Claude 4.5, Gemini 3, and more
+- **AI Arena** - Multiple AI models analyze simultaneously, vote-based decisions
+- **5 Trading Personas** - Hunter/Balanced/Monk/Flash/Surfer styles for different strategies
+- **Custom Prompts** - Fully customizable AI persona and trading strategy
+- **Smart News Analysis** - AI interprets market news and generates trading signals
+
+### 📊 Technical Analysis
+- **Multi-Timeframe** - Support for 1m/5m/15m/1h/4h/1d analysis
+- **Rich Indicators** - MA/EMA/RSI/MACD/KDJ/BOLL/ATR/OBV/VWAP and more
+- **Change Tracking** - Visualize indicator trends for better AI understanding
+- **Dual-Channel Signals** - Multi-timeframe signal confirmation
+
+### 💹 Trading Features
+- **OKX Futures** - Deep integration with OKX perpetual contracts API
+- **Paper Trading** - Risk-free strategy testing
+- **Risk Control** - Stop-loss, take-profit, position sizing, daily loss limits
+- **Multi-Strategy** - Built-in strategies + custom strategy development
+- **More Exchanges** - Binance, Bybit support coming soon
+
+### 📈 Market Sentiment
+- **Fear & Greed Index** - Real-time market sentiment monitoring
+- **Long/Short Ratio** - Smart interpretation of market positioning
+- **On-Chain Data** - Whale movements, exchange inflows/outflows
+
+### 🖥️ User Interface
+- **Web UI** - Modern Streamlit-based dashboard
+- **Real-Time Monitoring** - Live positions, PnL, and signals
+- **One-Click Deploy** - Docker support, Windows/Linux/macOS
 
 ---
 
@@ -118,27 +146,38 @@ hyweishi/
 
 ---
 
-## Supported AI Providers
+## Supported AI Models
 
-| Provider | Free Tier | Notes |
-|----------|-----------|-------|
-| DeepSeek | ✅ | Recommended for Chinese users |
-| Qwen (通义千问) | ✅ | Via DashScope |
-| Spark (讯飞星火) | ✅ | Spark Lite free |
-| GLM (智谱) | ✅ | GLM-4-Flash free |
-| Hunyuan (腾讯混元) | ✅ | Hunyuan-Lite free |
-| Doubao (豆包) | ✅ | Via Volcengine |
-| OpenAI | ❌ | GPT-4, GPT-3.5 |
-| Claude | ❌ | Anthropic |
-| Gemini | ✅ | Google, free tier available |
-| Grok | ❌ | xAI |
-| Perplexity | ❌ | Online search capability |
+| Provider | Models | Free Tier | Notes |
+|----------|--------|-----------|-------|
+| DeepSeek | V3.1 Chat, R1 Reasoner | ✅ | High-performance, recommended |
+| Qwen | Qwen 3 (235B), QwQ Plus | ✅ | Alibaba Cloud, deep reasoning |
+| Spark | Spark 4.0 Ultra | ✅ Lite | iFlytek |
+| Hunyuan | Turbo Latest | ✅ Lite | Tencent, 256K context |
+| Doubao | 1.5 Pro, Seed 1.6 | ✅ | ByteDance |
+| GLM | GLM-4.6, GLM-4 Plus | ✅ Flash | Zhipu AI |
+| OpenAI | GPT-5.2, o3, o4-mini | ❌ | Latest flagship |
+| Claude | Claude 4.5 Sonnet/Opus | ❌ | Anthropic |
+| Gemini | Gemini 3 Pro, 2.5 Flash | ✅ | Google |
+| Grok | Grok 4, Grok 3 | ❌ | xAI |
+| Perplexity | Sonar Pro, Reasoning | ❌ | Web search capability |
 
 ---
 
 ## License
 
 [AGPL-3.0](LICENSE)
+
+---
+
+## Support the Project
+
+If this project helps you, consider buying the author a coffee ☕
+
+**Crypto Donations:**
+- BTC: `TBD`
+- ETH/USDT (ERC20): `TBD`
+- USDT (TRC20): `TBD`
 
 ---
 
