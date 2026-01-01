@@ -184,9 +184,7 @@ hyweishi-trading-bot/
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡 (´▽`ʃ♡ƪ)
 
 **加密货币捐赠：**
-- BTC: `待填写`
-- ETH/USDT (ERC20): `待填写`
-- USDT (TRC20): `待填写`
+- USDT (BEP20): `0x67c77a43d6524994af9497b4cd32080b95f2ace9`
 
 ---
 

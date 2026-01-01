@@ -184,9 +184,7 @@ This project is licensed under [AGPL-3.0](LICENSE).
 If this project helps you, consider buying the author a coffee (´▽`ʃ♡ƪ)
 
 **Crypto Donations:**
-- BTC: `TBD`
-- ETH/USDT (ERC20): `TBD`
-- USDT (TRC20): `TBD`
+- USDT (BEP20): `0x67c77a43d6524994af9497b4cd32080b95f2ace9`
 
 ---
 
