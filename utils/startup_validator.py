@@ -197,7 +197,7 @@ class StartupValidator:
         返回: (is_accessible, message)
         """
         if db_path is None:
-            from db_config import DATA_DIR
+            from database.db_config import DATA_DIR
             db_path = os.path.join(DATA_DIR, 'quant_system.db')
 
         # 检查父目录是否存在

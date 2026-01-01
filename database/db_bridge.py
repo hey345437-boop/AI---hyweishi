@@ -58,7 +58,7 @@ def _get_pool():
     global _connection_pool
     if _connection_pool is None and _use_connection_pool:
         try:
-            from connection_pool import get_global_pool
+            from database.connection_pool import get_global_pool
             _connection_pool = get_global_pool()
             logger.info("数据库连接池已启用")
         except Exception as e:

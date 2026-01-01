@@ -60,7 +60,7 @@ import numpy as np
 
 # 尝试导入加速指标模块
 try:
-    from ai_indicators import calc_ema, calc_ma, calc_rsi, calc_macd, calc_boll, calc_kdj, calc_atr, calc_obv, calc_vwap
+    from ai.ai_indicators import calc_ema, calc_ma, calc_rsi, calc_macd, calc_boll, calc_kdj, calc_atr, calc_obv, calc_vwap
     USE_ACCELERATED = True
 except ImportError:
     import pandas_ta as ta
@@ -385,7 +385,7 @@ class {class_name}:
     def _generate_by_ai(self, description: str) -> Dict[str, Any]:
         """使用 AI 生成策略代码"""
         try:
-            from ai_providers import UniversalAIClient, get_provider
+            from ai.ai_providers import UniversalAIClient, get_provider
             
             ai_id = self.ai_config.get('ai_id')
             api_key = self.ai_config.get('api_key')
@@ -559,7 +559,7 @@ class {class_name}:
 import numpy as np
 
 try:
-    from ai_indicators import calc_ema, calc_rsi, calc_macd
+    from ai.ai_indicators import calc_ema, calc_rsi, calc_macd
     USE_ACCELERATED = True
 except ImportError:
     import pandas_ta as ta
@@ -627,10 +627,10 @@ from typing import Dict, Any, Optional
 try:
     from strategies.advanced_strategy_template import AdvancedStrategyBase, PositionSide
 except ImportError:
-    from advanced_strategy_template import AdvancedStrategyBase, PositionSide
+    from strategies.advanced_strategy_template import AdvancedStrategyBase, PositionSide
 
 try:
-    from ai_indicators import calc_ema, calc_rsi, calc_atr
+    from ai.ai_indicators import calc_ema, calc_rsi, calc_atr
     USE_ACCELERATED = True
 except ImportError:
     import pandas_ta as ta

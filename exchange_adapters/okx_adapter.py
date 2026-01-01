@@ -380,7 +380,7 @@ class OKXAdapter(ExchangeAdapter):
         # 如果环境变量没有代理，自动检测系统代理
         if not http_proxy and not https_proxy:
             try:
-                from env_validator import EnvironmentValidator
+                from utils.env_validator import EnvironmentValidator
                 proxy_config = EnvironmentValidator.detect_system_proxy()
                 http_proxy = proxy_config.get('http_proxy')
                 https_proxy = proxy_config.get('https_proxy') or http_proxy

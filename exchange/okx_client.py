@@ -683,7 +683,7 @@ def load_config_from_env(mode: Mode) -> OkxConfig:
     if not proxy:
         # 自动检测系统代理
         try:
-            from env_validator import EnvironmentValidator
+            from utils.env_validator import EnvironmentValidator
             proxy_config = EnvironmentValidator.detect_system_proxy()
             proxy = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
             if proxy:

@@ -126,7 +126,7 @@ class BacktestEngine:
             # 如果环境变量没有代理，尝试自动检测
             if not https_proxy:
                 try:
-                    from env_validator import EnvironmentValidator
+                    from utils.env_validator import EnvironmentValidator
                     proxy_config = EnvironmentValidator.detect_system_proxy()
                     https_proxy = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
                     http_proxy = proxy_config.get('http_proxy') or https_proxy
@@ -390,7 +390,7 @@ class BacktestEngine:
                 pass
             
             try:
-                from ai_indicators import calc_ema, calc_rsi, calc_atr, calc_macd
+                from ai.ai_indicators import calc_ema, calc_rsi, calc_atr, calc_macd
                 exec_globals['calc_ema'] = calc_ema
                 exec_globals['calc_rsi'] = calc_rsi
                 exec_globals['calc_atr'] = calc_atr

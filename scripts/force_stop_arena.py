@@ -33,7 +33,7 @@ def force_stop():
     print("=" * 50)
     
     try:
-        from arena_scheduler import (
+        from ai.arena_scheduler import (
             stop_scheduler,
             is_scheduler_running,
             _precision_scheduler
@@ -50,7 +50,7 @@ def force_stop():
         
         # 清除持久化状态
         try:
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_config_manager import get_ai_config_manager
             config_mgr = get_ai_config_manager()
             config_mgr.clear_scheduler_state()
             print(" 已清除持久化状态")

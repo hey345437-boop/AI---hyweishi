@@ -286,7 +286,7 @@ def get_global_pool(db_config: Optional[Dict[str, Any]] = None) -> ConnectionPoo
         with _pool_lock:
             if _global_pool is None:
                 if db_config is None:
-                    from db_config import get_db_config_from_env_and_secrets
+                    from database.db_config import get_db_config_from_env_and_secrets
                     _, db_config = get_db_config_from_env_and_secrets()
                 _global_pool = ConnectionPool(db_config)
     

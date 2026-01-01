@@ -85,7 +85,7 @@ class OKXWebSocketClient:
         # 如果没有配置代理，使用 env_validator 的自动检测
         if not self.https_proxy and not self.http_proxy:
             try:
-                from env_validator import EnvironmentValidator
+                from utils.env_validator import EnvironmentValidator
                 proxy_config = EnvironmentValidator.detect_system_proxy()
                 self.https_proxy = proxy_config.get('https_proxy') or proxy_config.get('http_proxy')
                 self.http_proxy = proxy_config.get('http_proxy')

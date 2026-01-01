@@ -92,7 +92,7 @@ class AITradeBridge:
         """懒加载 db_bridge"""
         if self._db_bridge is None:
             try:
-                import db_bridge
+                from database import db_bridge
                 self._db_bridge = db_bridge
             except ImportError:
                 logger.error("无法导入 db_bridge 模块")
@@ -102,7 +102,7 @@ class AITradeBridge:
         """懒加载 OKX 客户端"""
         if self._okx_client is None:
             try:
-                from okx_client import get_okx_client
+                from exchange.okx_client import get_okx_client
                 self._okx_client = get_okx_client()
             except Exception as e:
                 logger.error(f"无法获取 OKX 客户端: {e}")

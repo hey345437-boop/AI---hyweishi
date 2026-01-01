@@ -74,7 +74,7 @@ def log_database_info(startup_log: StartupLog) -> None:
         startup_log: 启动日志对象
     """
     try:
-        from db_config import get_db_config_from_env_and_secrets
+        from database.db_config import get_db_config_from_env_and_secrets
         
         db_kind, db_config = get_db_config_from_env_and_secrets()
         startup_log.database_type = db_kind
@@ -95,7 +95,7 @@ def log_database_info(startup_log: StartupLog) -> None:
             logger.info(f"📂 路径: {startup_log.database_path}")
         
         # 测试连接
-        from db_bridge import _get_connection
+        from database.db_bridge import _get_connection
         conn, _ = _get_connection()
         conn.close()
         logger.info(" 数据库连接测试成功")
@@ -151,7 +151,7 @@ def log_security_info(startup_log: StartupLog) -> None:
         startup_log: 启动日志对象
     """
     try:
-        from env_validator import EnvironmentValidator
+        from utils.env_validator import EnvironmentValidator
         
         # 检查加密密钥
         key_valid, key_error = EnvironmentValidator.validate_encryption_key()

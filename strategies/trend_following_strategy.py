@@ -40,13 +40,13 @@ try:
         AdvancedStrategyBase, PositionSide, RiskConfig
     )
 except ImportError:
-    from advanced_strategy_template import (
+    from strategies.advanced_strategy_template import (
         AdvancedStrategyBase, PositionSide, RiskConfig
     )
 
 # 尝试导入加速指标
 try:
-    from ai_indicators import calc_ema, calc_rsi, calc_atr
+    from ai.ai_indicators import calc_ema, calc_rsi, calc_atr
     USE_ACCELERATED = True
 except ImportError:
     import pandas_ta as ta

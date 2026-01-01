@@ -19,7 +19,7 @@ from enum import Enum
 
 # 尝试导入加速指标模块
 try:
-    from ai_indicators import calc_ema, calc_rsi, calc_atr, calc_macd
+    from ai.ai_indicators import calc_ema, calc_rsi, calc_atr, calc_macd
     USE_ACCELERATED = True
 except ImportError:
     import pandas_ta as ta
