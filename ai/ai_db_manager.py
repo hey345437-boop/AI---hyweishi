@@ -909,7 +909,7 @@ class AIDBManager:
         if current_prices is None:
             current_prices = {}
             try:
-                from ai_indicators import get_data_source
+                from ai.ai_indicators import get_data_source
                 data_source = get_data_source()
                 
                 # 获取所有需要的币种

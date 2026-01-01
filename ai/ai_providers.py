@@ -733,7 +733,7 @@ def create_client(provider_id: str, api_key: str = None, model_id: str = None) -
     if api_key is None:
         # 从配置中读取
         try:
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_config_manager import get_ai_config_manager
             config_mgr = get_ai_config_manager()
             config = config_mgr.get_ai_api_config(provider_id)
             if not config or not config.get('api_key'):

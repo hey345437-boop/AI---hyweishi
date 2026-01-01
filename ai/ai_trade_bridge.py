@@ -376,7 +376,7 @@ class AITradeBridge:
                    f"{signal.position_size_usd}USD {signal.leverage}x")
         
         try:
-            from ai_db_manager import get_ai_db_manager
+            from ai.ai_db_manager import get_ai_db_manager
             db = get_ai_db_manager()
             
             # 获取当前价格（使用信号中的价格或获取实时价格）
@@ -495,7 +495,7 @@ class AITradeBridge:
         """获取当前价格"""
         try:
             # 尝试从 Market API 获取
-            from ai_indicators import get_data_source
+            from ai.ai_indicators import get_data_source
             ds = get_data_source()
             ohlcv = ds.fetch_ohlcv(symbol, '1m', 1)
             if ohlcv:

@@ -1079,7 +1079,7 @@ class UniversalAgent(BaseAgent):
             api_key: API Key
             model_id: 模型 ID（可选，不指定则使用默认模型）
         """
-        from ai_providers import AI_PROVIDERS, PROVIDER_ALIASES, UniversalAIClient
+        from ai.ai_providers import AI_PROVIDERS, PROVIDER_ALIASES, UniversalAIClient
         
         # 处理别名
         provider_id = PROVIDER_ALIASES.get(provider_id, provider_id)
@@ -1102,7 +1102,7 @@ class UniversalAgent(BaseAgent):
     def _get_client(self):
         """获取或创建 UniversalAIClient 实例"""
         if self._client is None:
-            from ai_providers import UniversalAIClient
+            from ai.ai_providers import UniversalAIClient
             self._client = UniversalAIClient(self.provider_id, self.api_key, self.model)
             self._client.timeout = self.timeout
         return self._client
@@ -1155,7 +1155,7 @@ def create_agent(agent_name: str, api_key: str = "", model: str = "") -> BaseAge
     Returns:
         UniversalAgent 实例
     """
-    from ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
+    from ai.ai_providers import AI_PROVIDERS, PROVIDER_ALIASES
     
     # 处理别名
     provider_id = PROVIDER_ALIASES.get(agent_name.lower(), agent_name.lower())
@@ -1178,7 +1178,7 @@ def create_agent_from_config(agent_name: str) -> BaseAgent:
         配置好的 UniversalAgent 实例
     """
     try:
-        from ai_config_manager import get_ai_config_manager
+        from ai.ai_config_manager import get_ai_config_manager
         config_mgr = get_ai_config_manager()
         config = config_mgr.get_ai_api_config(agent_name)
         
@@ -1196,5 +1196,5 @@ def create_agent_from_config(agent_name: str) -> BaseAgent:
 
 def get_available_agents() -> List[str]:
     """获取可用的 Agent 列表（从 ai_providers 动态获取）"""
-    from ai_providers import get_all_provider_ids
+    from ai.ai_providers import get_all_provider_ids
     return get_all_provider_ids()
