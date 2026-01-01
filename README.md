@@ -1,4 +1,4 @@
-# 🚀 何以为势 (HyWeiShi)
+# (・ω・) 何以为势 (HyWeiShi)
 
 <div align="center">
 
@@ -8,7 +8,7 @@
 
 <br/><br/>
 
-**🔮 AI 驱动的加密货币合约交易引擎**
+**(*≧▽≦) AI 驱动的加密货币合约交易引擎**
 
 *让 AI 成为你的交易搭档，洞察市场先机*
 
@@ -44,32 +44,32 @@
 
 ## 功能特性
 
-### 🤖 AI 智能决策
+### (￣▽￣) AI 智能决策
 - **12+ AI 服务商** - DeepSeek、通义千问、GPT-5、Claude 4.5、Gemini 3 等最新模型
 - **AI 竞技场** - 多个 AI 模型同时分析，投票决策，提高准确率
 - **5 种交易人设** - 猎人型/均衡型/僧侣型/闪电型/冲浪型，适应不同风格
 - **自定义提示词** - 完全自定义 AI 人设和交易策略，打造专属交易员
 - **智能新闻分析** - AI 自动解读市场新闻，生成交易信号
 
-### 📊 技术分析
+### (◎_◎) 技术分析
 - **多时间周期** - 支持 1m/5m/15m/1h/4h/1d 等多周期分析
 - **丰富指标** - MA/EMA/RSI/MACD/KDJ/BOLL/ATR/OBV/VWAP 等
 - **变化量追踪** - 指标变化趋势可视化，AI 更好理解市场动态
 - **双通道信号** - 多时间周期信号确认机制
 
-### 💹 交易功能
+### (￥ω￥) 交易功能
 - **OKX 合约交易** - 深度集成 OKX 永续合约 API
 - **模拟交易** - Paper Trading 模式，零风险测试策略
 - **风控系统** - 止损止盈、仓位管理、每日亏损限制
 - **多策略支持** - 内置策略 + 自定义策略开发
 - **更多交易所** - 后续将支持 Binance、Bybit 等主流交易所
 
-### 📈 市场情绪
+### (°∀°) 市场情绪
 - **恐惧贪婪指数** - 实时市场情绪监控
 - **多空比分析** - 智能解读多空比变化
 - **链上数据** - 大户动向、交易所流入流出
 
-### 🖥️ 用户界面
+### (｡･ω･｡) 用户界面
 - **Web UI** - 基于 Streamlit 的现代化界面
 - **实时监控** - 持仓、收益、信号实时更新
 - **一键部署** - Docker 支持，Windows/Linux/macOS 全平台
@@ -86,46 +86,37 @@ git clone https://github.com/hey345437-boop/my-trading-bot-2.git
 cd my-trading-bot-2
 install.bat
 ```
-安装完成后编辑 `.env` 文件配置 API 密钥，然后双击 `启动机器人.bat` 启动。
+安装完成后双击 `启动机器人.bat` 启动，在 Web 界面中配置 API 密钥即可使用。
 
 **Linux/macOS:**
 ```bash
 git clone https://github.com/hey345437-boop/my-trading-bot-2.git
 cd my-trading-bot-2
 chmod +x install.sh && ./install.sh
-cp .env.example .env && nano .env
 source .venv/bin/activate && streamlit run app.py
 ```
+启动后访问 http://localhost:8501，在界面中配置 API 密钥。
 
 ### 方式二：Docker 部署
 
 ```bash
 git clone https://github.com/hey345437-boop/my-trading-bot-2.git
 cd my-trading-bot-2
-cp .env.example .env
-# 编辑 .env 配置 API 密钥
 docker-compose up -d
-# 访问 http://localhost:8501
 ```
+访问 http://localhost:8501，在界面中配置 API 密钥。
 
 ---
 
 ## 配置说明
 
-编辑 `.env` 文件：
+所有配置都可以在 Web 界面中完成：
 
-```env
-# 运行模式: paper(测试) / live(实盘)
-RUN_MODE=paper
+- **OKX API** - 在「交易设置」页面配置交易所 API
+- **AI API** - 在「AI 设置」页面配置各 AI 服务商的 API Key
+- **交易参数** - 在界面中设置交易对、杠杆、仓位等参数
 
-# OKX API
-OKX_API_KEY=your_api_key
-OKX_API_SECRET=your_api_secret
-OKX_API_PASSPHRASE=your_passphrase
-
-# AI 配置（可选）
-DEEPSEEK_API_KEY=your_deepseek_key
-```
+> (・ω・) 也支持通过 `.env` 文件配置，适合高级用户或 Docker 部署
 
 ---
 
@@ -181,7 +172,7 @@ hyweishi-trading-bot/
 
 ## 支持项目
 
-如果这个项目对你有帮助，欢迎请作者喝杯咖啡 ☕
+如果这个项目对你有帮助，欢迎请作者喝杯咖啡 (´▽`ʃ♡ƪ)
 
 **加密货币捐赠：**
 - BTC: `待填写`
@@ -199,6 +190,6 @@ hyweishi-trading-bot/
 
 <div align="center">
 
-**Made with ❤️ by HyWeiShi**
+**Made with (♥ω♥) by HyWeiShi**
 
 </div>

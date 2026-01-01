@@ -1,4 +1,4 @@
-# 🚀 HyWeiShi (何以为势)
+# (・ω・) HyWeiShi (何以为势)
 
 <div align="center">
 
@@ -8,7 +8,7 @@
 
 <br/><br/>
 
-**🔮 AI-Powered Cryptocurrency Futures Trading Engine**
+**(*≧▽≦) AI-Powered Cryptocurrency Futures Trading Engine**
 
 *Let AI be your trading partner, seize market opportunities*
 
@@ -44,32 +44,32 @@
 
 ## Features
 
-### 🤖 AI-Powered Trading
+### (￣▽￣) AI-Powered Trading
 - **12+ AI Providers** - DeepSeek, Qwen 3, GPT-5, Claude 4.5, Gemini 3, and more
 - **AI Arena** - Multiple AI models analyze simultaneously, vote-based decisions
 - **5 Trading Personas** - Hunter/Balanced/Monk/Flash/Surfer styles for different strategies
 - **Custom Prompts** - Fully customizable AI persona and trading strategy
 - **Smart News Analysis** - AI interprets market news and generates trading signals
 
-### 📊 Technical Analysis
+### (◎_◎) Technical Analysis
 - **Multi-Timeframe** - Support for 1m/5m/15m/1h/4h/1d analysis
 - **Rich Indicators** - MA/EMA/RSI/MACD/KDJ/BOLL/ATR/OBV/VWAP and more
 - **Change Tracking** - Visualize indicator trends for better AI understanding
 - **Dual-Channel Signals** - Multi-timeframe signal confirmation
 
-### 💹 Trading Features
+### (￥ω￥) Trading Features
 - **OKX Futures** - Deep integration with OKX perpetual contracts API
 - **Paper Trading** - Risk-free strategy testing
 - **Risk Control** - Stop-loss, take-profit, position sizing, daily loss limits
 - **Multi-Strategy** - Built-in strategies + custom strategy development
 - **More Exchanges** - Binance, Bybit support coming soon
 
-### 📈 Market Sentiment
+### (°∀°) Market Sentiment
 - **Fear & Greed Index** - Real-time market sentiment monitoring
 - **Long/Short Ratio** - Smart interpretation of market positioning
 - **On-Chain Data** - Whale movements, exchange inflows/outflows
 
-### 🖥️ User Interface
+### (｡･ω･｡) User Interface
 - **Web UI** - Modern Streamlit-based dashboard
 - **Real-Time Monitoring** - Live positions, PnL, and signals
 - **One-Click Deploy** - Docker support, Windows/Linux/macOS
@@ -86,46 +86,37 @@ git clone https://github.com/hey345437-boop/my-trading-bot-2.git
 cd my-trading-bot-2
 install.bat
 ```
-After installation, edit `.env` file with your API keys, then run `启动机器人.bat`.
+After installation, run `启动机器人.bat` and configure API keys in the web interface.
 
 **Linux/macOS:**
 ```bash
 git clone https://github.com/hey345437-boop/my-trading-bot-2.git
 cd my-trading-bot-2
 chmod +x install.sh && ./install.sh
-cp .env.example .env && nano .env
 source .venv/bin/activate && streamlit run app.py
 ```
+Visit http://localhost:8501 and configure API keys in the interface.
 
 ### Option 2: Docker
 
 ```bash
 git clone https://github.com/hey345437-boop/my-trading-bot-2.git
 cd my-trading-bot-2
-cp .env.example .env
-# Edit .env with your API keys
 docker-compose up -d
-# Visit http://localhost:8501
 ```
+Visit http://localhost:8501 and configure API keys in the interface.
 
 ---
 
 ## Configuration
 
-Edit `.env` file:
+All settings can be configured in the Web interface:
 
-```env
-# Run mode: paper (testing) / live (real trading)
-RUN_MODE=paper
+- **OKX API** - Configure exchange API in "Trading Settings"
+- **AI API** - Configure AI provider API keys in "AI Settings"  
+- **Trading Parameters** - Set trading pairs, leverage, position size in the interface
 
-# OKX API
-OKX_API_KEY=your_api_key
-OKX_API_SECRET=your_api_secret
-OKX_API_PASSPHRASE=your_passphrase
-
-# AI Configuration (optional)
-DEEPSEEK_API_KEY=your_deepseek_key
-```
+> (・ω・) Advanced users can also configure via `.env` file for Docker deployment
 
 ---
 
@@ -181,7 +172,7 @@ This project is licensed under [AGPL-3.0](LICENSE).
 
 ## Support the Project
 
-If this project helps you, consider buying the author a coffee ☕
+If this project helps you, consider buying the author a coffee (´▽`ʃ♡ƪ)
 
 **Crypto Donations:**
 - BTC: `TBD`
@@ -199,6 +190,6 @@ If this project helps you, consider buying the author a coffee ☕
 
 <div align="center">
 
-**Made with ❤️ by HyWeiShi**
+**Made with (♥ω♥) by HyWeiShi**
 
 </div>
