@@ -308,6 +308,7 @@ def format_with_changes(
     格式化指标，包含变化量和状态摘要
     
     这是 format_for_ai 的增强版，输出更紧凑且包含变化信息
+    所有用户选择的指标都会输出，不会删减
     """
     tracker = get_state_tracker()
     
@@ -363,6 +364,14 @@ def format_with_changes(
         arrow = '↑' if direction == 'up' else '↓'
         return f"{val:.{decimals}f}({arrow}{abs(chg):.{decimals}f})"
     
+    # MA / EMA
+    ma_str = fmt_change('MA', 2)
+    ema_str = fmt_change('EMA', 2)
+    if ma_str or ema_str:
+        ma_part = f"MA:{ma_str}" if ma_str else ""
+        ema_part = f"EMA:{ema_str}" if ema_str else ""
+        lines.append(f"均线: {ma_part} {ema_part}".strip())
+    
     # RSI
     rsi_str = fmt_change('RSI')
     if rsi_str:
@@ -370,28 +379,44 @@ def format_with_changes(
     
     # MACD
     macd_str = fmt_change('MACD', 4)
+    macd_signal_str = fmt_change('MACD_Signal', 4)
     macd_hist_str = fmt_change('MACD_Hist', 4)
     if macd_str:
-        lines.append(f"MACD: {macd_str} | Hist: {macd_hist_str}")
+        lines.append(f"MACD: {macd_str} | Signal: {macd_signal_str} | Hist: {macd_hist_str}")
     
     # KDJ
     kdj_k = fmt_change('KDJ_K')
     kdj_d = fmt_change('KDJ_D')
+    kdj_j = fmt_change('KDJ_J')
     if kdj_k:
-        lines.append(f"KDJ: K={kdj_k} D={kdj_d}")
+        lines.append(f"KDJ: K={kdj_k} D={kdj_d} J={kdj_j}")
     
-    # 布林带位置
+    # 布林带
     boll_upper = latest_values.get('BOLL_Upper')
+    boll_middle = latest_values.get('BOLL_Middle')
     boll_lower = latest_values.get('BOLL_Lower')
     if boll_upper and boll_lower:
         boll_pos = (current_price - boll_lower) / (boll_upper - boll_lower) * 100
-        lines.append(f"BOLL位置: {boll_pos:.0f}% (上:{boll_upper:.2f} 下:{boll_lower:.2f})")
+        lines.append(f"BOLL: 位置{boll_pos:.0f}% | 上:{boll_upper:.2f} 中:{boll_middle:.2f} 下:{boll_lower:.2f}")
     
     # ATR
     atr = latest_values.get('ATR')
     if atr:
         atr_pct = atr / current_price * 100
-        lines.append(f"ATR: {atr:.2f} ({atr_pct:.2f}%)")
+        atr_str = fmt_change('ATR', 2)
+        lines.append(f"ATR: {atr_str} ({atr_pct:.2f}%)")
+    
+    # OBV
+    obv = latest_values.get('OBV')
+    if obv is not None:
+        obv_str = fmt_change('OBV', 0)
+        lines.append(f"OBV: {obv_str}")
+    
+    # VWAP
+    vwap = latest_values.get('VWAP')
+    if vwap is not None:
+        vwap_str = fmt_change('VWAP', 2)
+        lines.append(f"VWAP: {vwap_str}")
     
     # 关键信号
     if state.signals:
