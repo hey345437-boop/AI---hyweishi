@@ -51,16 +51,16 @@
 
 **Windows:**
 ```bash
-git clone https://github.com/your-username/hyweishi-trading-bot.git
-cd hyweishi-trading-bot
+git clone https://github.com/hey345437-boop/my-trading-bot-2.git
+cd my-trading-bot-2
 install.bat
 ```
 安装完成后编辑 `.env` 文件配置 API 密钥，然后双击 `启动机器人.bat` 启动。
 
 **Linux/macOS:**
 ```bash
-git clone https://github.com/your-username/hyweishi-trading-bot.git
-cd hyweishi-trading-bot
+git clone https://github.com/hey345437-boop/my-trading-bot-2.git
+cd my-trading-bot-2
 chmod +x install.sh && ./install.sh
 cp .env.example .env && nano .env
 source .venv/bin/activate && streamlit run app.py
@@ -69,8 +69,8 @@ source .venv/bin/activate && streamlit run app.py
 ### 方式二：Docker 部署
 
 ```bash
-git clone https://github.com/your-username/hyweishi-trading-bot.git
-cd hyweishi-trading-bot
+git clone https://github.com/hey345437-boop/my-trading-bot-2.git
+cd my-trading-bot-2
 cp .env.example .env
 # 编辑 .env 配置 API 密钥
 docker-compose up -d
