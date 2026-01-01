@@ -41,7 +41,7 @@ except ImportError:
 
 # 双通道信号系统支持
 try:
-    from beijing_time_converter import BeijingTimeConverter, DualChannelChartRenderer
+    from utils.beijing_time_converter import BeijingTimeConverter, DualChannelChartRenderer
     HAS_DUAL_CHANNEL = True
 except ImportError:
     HAS_DUAL_CHANNEL = False
