@@ -25,7 +25,11 @@ from .news_fetcher import (
 )
 
 from .news_analyzer import (
-    NewsAnalyzer,
+    SmartNewsAnalyzer,
+    NewsDigest,
+    MarketSignal,
+    get_smart_news_analyzer,
+    get_news_analyzer,
     analyze_news_sentiment,
     get_market_impact
 )
@@ -50,7 +54,11 @@ __all__ = [
     'NewsFetcher',
     'NewsItem',
     'get_latest_news',
-    'NewsAnalyzer',
+    'SmartNewsAnalyzer',
+    'NewsDigest',
+    'MarketSignal',
+    'get_smart_news_analyzer',
+    'get_news_analyzer',
     'analyze_news_sentiment',
     'get_market_impact',
     'SentimentCache',

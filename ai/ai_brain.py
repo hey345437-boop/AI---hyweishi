@@ -296,28 +296,30 @@ class BaseAgent(ABC):
                 for i, c in enumerate(recent)
             ])
         
-        # 构建情绪分析部分（增强版：包含新闻分析）
+        # 构建情绪分析部分（使用 AI 分析的新闻摘要）
         sentiment_section = ""
         if context.sentiment:
             value = context.sentiment.get('value', 'N/A')
             classification = context.sentiment.get('classification', '未知')
             combined_score = context.sentiment.get('combined_score', 0)
             combined_bias = context.sentiment.get('combined_bias', 'neutral')
-            key_events = context.sentiment.get('key_events', [])
-            suggestion = context.sentiment.get('suggestion', '')
             
+            bias_cn = {'bullish': '偏多', 'bearish': '偏空', 'neutral': '中性'}
             sentiment_section = f"""
-【市场情绪 (Fear & Greed Index)】
-- 指数值: {value}
-- 情绪等级: {classification}
-- 综合得分: {combined_score} (偏向: {combined_bias})
-"""
-            if key_events:
-                sentiment_section += "- 关键事件:\n"
-                for event in key_events[:3]:
-                    sentiment_section += f"  • {event}\n"
-            if suggestion:
-                sentiment_section += f"- 新闻建议: {suggestion}\n"
+【市场情绪】
+Fear & Greed: {value} ({classification}) | 综合: {combined_score} ({bias_cn.get(combined_bias, combined_bias)})"""
+            
+            # 使用 AI 分析的新闻摘要（更简洁）
+            formatted_news = context.sentiment.get('formatted_news', '')
+            if formatted_news:
+                sentiment_section += f"\n{formatted_news}"
+            else:
+                # 回退到旧格式
+                key_events = context.sentiment.get('key_events', [])
+                if key_events:
+                    sentiment_section += "\n【新闻摘要】"
+                    for event in key_events[:5]:
+                        sentiment_section += f"\n  • {event}"
         
         # 构建持仓状态
         position_text = "无持仓"
