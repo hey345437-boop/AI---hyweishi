@@ -146,26 +146,26 @@ class ArenaScheduler:
     
     def _get_db_manager(self):
         if self._db_manager is None:
-            from ai_db_manager import get_ai_db_manager
+            from ai.ai_db_manager import get_ai_db_manager
             self._db_manager = get_ai_db_manager()
         return self._db_manager
     
     def _get_indicator_calculator(self):
         if self._indicator_calculator is None:
-            from ai_indicators import IndicatorCalculator
+            from ai.ai_indicators import IndicatorCalculator
             self._indicator_calculator = IndicatorCalculator()
         return self._indicator_calculator
     
     def _get_data_source(self):
         if self._data_source is None:
-            from ai_indicators import get_data_source
+            from ai.ai_indicators import get_data_source
             self._data_source = get_data_source()
         return self._data_source
     
     def _get_agent(self, agent_name: str):
         if agent_name not in self._agent_instances:
-            from ai_brain import create_agent
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_brain import create_agent
+            from ai.ai_config_manager import get_ai_config_manager
             
             api_key = self.api_keys.get(agent_name, "")
             
@@ -423,7 +423,7 @@ class ArenaScheduler:
             )
         
         # 2. 构建上下文
-        from ai_brain import MarketContext
+        from ai.ai_brain import MarketContext
         context = MarketContext(
             symbol=market_data['symbol'],
             timeframe=market_data['timeframe'],
@@ -462,7 +462,7 @@ class ArenaScheduler:
         
         # 4. 存储到数据库（P1: 保存后回填 decision_id 用于审计追踪）
         db = self._get_db_manager()
-        from ai_db_manager import AIDecision
+        from ai.ai_db_manager import AIDecision
         import json
         
         for d in processed:
@@ -541,7 +541,7 @@ class ArenaScheduler:
         logger.info(f"[Arena] 批量分析 {len(symbols)} 个币种 | AI: {self.agents}")
         
         # 1. 获取所有币种的市场数据
-        from ai_brain import MarketContext
+        from ai.ai_brain import MarketContext
         contexts = []
         symbol_data_map = {}
         
@@ -620,7 +620,7 @@ class ArenaScheduler:
                 self._api_failure_counts[agent_name] = 0
                 
                 # 保存每个币种的决策到数据库
-                from ai_db_manager import AIDecision
+                from ai.ai_db_manager import AIDecision
                 import json as json_module
                 
                 for i, decision in enumerate(decisions):
@@ -747,7 +747,7 @@ class ArenaScheduler:
         """
         # 导入桥接模块
         try:
-            from ai_trade_bridge import (
+            from ai.ai_trade_bridge import (
                 get_ai_trade_bridge, AITradeSignal, AITradeMode
             )
             has_bridge = True
@@ -866,7 +866,7 @@ class ArenaScheduler:
         import re
         
         try:
-            from ai_config_manager import get_ai_config_manager
+            from ai.ai_config_manager import get_ai_config_manager
             config_mgr = get_ai_config_manager()
             
             # 优先从数据库配置读取
@@ -1144,13 +1144,13 @@ class PrecisionScheduler:
         # 线程停止后，再执行强制平仓（确保不会有新的交易）
         if force_close_positions:
             try:
-                from ai_db_manager import get_ai_db_manager
+                from ai.ai_db_manager import get_ai_db_manager
                 db = get_ai_db_manager()
                 
                 # 尝试获取当前价格（使用 1m K 线的最新收盘价）
                 current_prices = {}
                 try:
-                    from ai_indicators import get_data_source
+                    from ai.ai_indicators import get_data_source
                     data_source = get_data_source()
                     for symbol in self.symbols:
                         try:
@@ -1321,7 +1321,7 @@ def run_battle_sync(
 
 def get_leaderboard() -> List[Dict]:
     """获取 AI 排行榜"""
-    from ai_db_manager import get_ai_db_manager
+    from ai.ai_db_manager import get_ai_db_manager
     db = get_ai_db_manager()
     stats = db.get_all_stats()
     
@@ -1342,7 +1342,7 @@ def get_leaderboard() -> List[Dict]:
 
 def get_recent_decisions(limit: int = 20, since_timestamp: int = None) -> List[Dict]:
     """获取最近决策"""
-    from ai_db_manager import get_ai_db_manager
+    from ai.ai_db_manager import get_ai_db_manager
     db = get_ai_db_manager()
     decisions = db.get_latest_decisions(limit=limit, since_timestamp=since_timestamp)
     return [d.to_dict() for d in decisions]
