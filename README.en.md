@@ -166,7 +166,16 @@ hyweishi/
 
 ## License
 
-[AGPL-3.0](LICENSE)
+This project is licensed under [AGPL-3.0](LICENSE).
+
+**This means:**
+- ✅ Free to use, modify, and distribute
+- ✅ Can be used for personal learning and research
+- ⚠️ Modified code must also be open-sourced
+- ⚠️ If used for network services, source code must be disclosed
+- ❌ Copyright notices and license information must not be removed
+
+**For commercial use, please contact the author for licensing.**
 
 ---
 
