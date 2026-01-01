@@ -73,12 +73,12 @@ class StateTracker:
         timeframe: str, 
         offset: int = 1
     ) -> Optional[IndicatorSnapshot]:
-        """获取历史快照"""
+        """获取历史快照（offset=1 表示上一次记录）"""
         key = self._get_key(symbol, timeframe)
         history = self._history.get(key)
-        if not history or len(history) <= offset:
+        if not history or len(history) < offset:
             return None
-        return history[-(offset + 1)]
+        return history[-offset]
     
     def calc_changes(
         self, 
