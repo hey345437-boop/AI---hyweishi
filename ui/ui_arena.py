@@ -4668,7 +4668,7 @@ def _perform_ai_analysis(symbol: str, timeframe: str) -> Dict[str, Any]:
             else:
                 return {'error': '请先配置 AI API Key'}
         
-        from ai_brain import create_agent, MarketContext
+        from ai.ai_brain import create_agent, MarketContext
         import asyncio
         
         agent = create_agent(selected_ai, ai_configs[selected_ai].get('api_key', ''))

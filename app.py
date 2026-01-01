@@ -106,7 +106,7 @@ except ImportError:
 
 # 导入 Arena 调度器模块（可选）
 try:
-    from arena_scheduler import (
+    from ai.arena_scheduler import (
         start_scheduler, stop_scheduler, is_scheduler_running,
         get_latest_battle_result, get_recent_decisions
     )

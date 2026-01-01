@@ -154,7 +154,7 @@ def _get_ui_ws_client():
         return _UI_WS_CLIENT
     
     try:
-        from okx_websocket import OKXWebSocketClient, is_ws_available
+        from exchange.okx_websocket import OKXWebSocketClient, is_ws_available
         if is_ws_available():
             _UI_WS_CLIENT = OKXWebSocketClient(use_aws=False)
             return _UI_WS_CLIENT
