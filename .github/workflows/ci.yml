@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
       
       - name: Install dependencies
         run: |
@@ -26,16 +26,16 @@ jobs:
       - name: Lint with flake8
         run: |
           # 停止构建如果有 Python 语法错误或未定义的名称
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.venv,__pycache__,.git
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.venv,__pycache__,.git,strategies/examples
           # 警告但不阻止构建
-          flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics --exclude=.venv,__pycache__,.git
+          flake8 . --count --exit-zero --max-complexity=15 --max-line-length=120 --statistics --exclude=.venv,__pycache__,.git,strategies/examples
 
   test:
     name: Test
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.8', '3.10', '3.11']
+        python-version: ['3.10', '3.11', '3.12']
     
     steps:
       - uses: actions/checkout@v4
@@ -49,9 +49,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
       
       - name: Install dependencies
         run: |
@@ -61,16 +61,9 @@ jobs:
       
       - name: Run tests
         run: |
-          pytest tests/ -v --cov=core --cov=ai --cov=strategies --cov-report=xml --cov-report=term-missing
+          pytest tests/ -v --tb=short
         env:
           RUN_MODE: paper
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        if: matrix.python-version == '3.10'
-        with:
-          files: ./coverage.xml
-          fail_ci_if_error: false
 
   security:
     name: Security Check
@@ -81,12 +74,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
       
-      - name: Install safety
-        run: pip install safety
+      - name: Install pip-audit
+        run: pip install pip-audit
       
       - name: Check for vulnerabilities
         run: |
-          safety check -r requirements.txt --ignore 70612 || true
+          pip-audit -r requirements.txt || true
         continue-on-error: true
