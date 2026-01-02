@@ -808,7 +808,14 @@ class ArenaScheduler:
             
             # 开仓信号需要仓位，平仓信号不需要
             if signal_type.startswith('open_'):
-                size = d.get('position_size_usd') or 100
+                raw_size = d.get('position_size_usd', 0)
+                # P0修复: 如果 AI 返回 position_size_usd=0，说明 AI 不想开仓，跳过
+                if raw_size == 0:
+                    logger.warning(
+                        f"[Arena] {agent} 跳过开仓 {symbol}：AI 返回 position_size_usd=0"
+                    )
+                    continue
+                size = raw_size
             else:
                 size = 0  # 平仓不需要仓位金额
             confidence = d.get('confidence', 0)
