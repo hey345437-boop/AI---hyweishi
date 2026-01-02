@@ -141,15 +141,15 @@ class AITradeBridge:
         
         # 主界面必须是实盘模式
         if main_mode != 'live':
-            logger.info(f"[AIBridge] 主界面为 {main_mode} 模式，AI 只能模拟交易")
+            logger.debug(f"[AIBridge] 主界面为 {main_mode} 模式，AI 只能模拟交易")
             return False
         
         # AI 托管必须启用
         if not ai_takeover:
-            logger.info("[AIBridge] AI 托管未启用，只能模拟交易")
+            logger.debug("[AIBridge] AI 托管未启用，只能模拟交易")
             return False
         
-        logger.info("[AIBridge] 实盘交易已授权")
+        logger.debug("[AIBridge] 实盘交易已授权")
         return True
     
     def get_current_trade_mode(self, ai_takeover: bool = False) -> AITradeMode:
@@ -211,8 +211,9 @@ class AITradeBridge:
         
         风控逻辑完全由 AI 根据提示词自己决定！
         这里只检查技术上必须的参数：
-        1. 杠杆范围 1-20（交易所限制）
-        2. 仓位金额 > 0（否则无法下单）
+        1. 置信度门槛（开仓信号必须 >= 50%）
+        2. 杠杆范围 1-20（交易所限制）
+        3. 仓位金额 > 0（否则无法下单）
         """
         # hold/wait 信号直接通过
         if signal.signal in ['hold', 'wait']:
@@ -220,6 +221,14 @@ class AITradeBridge:
         
         # 开仓信号检查
         if signal.signal.startswith('open_'):
+            # P0修复: 置信度门槛检查
+            MIN_CONFIDENCE = 50
+            if signal.confidence < MIN_CONFIDENCE:
+                return {
+                    'valid': False,
+                    'reason': f"置信度 {signal.confidence:.0f}% 低于门槛 {MIN_CONFIDENCE}%"
+                }
+            
             # 杠杆范围（交易所技术限制）
             if signal.leverage > 20:
                 return {
@@ -372,7 +381,7 @@ class AITradeBridge:
         
         写入 arena.db 的虚拟持仓表
         """
-        logger.info(f"[AIBridge] 执行模拟交易: {signal.agent_name} {signal.signal} {signal.symbol} "
+        logger.debug(f"[AIBridge] 执行模拟交易: {signal.agent_name} {signal.signal} {signal.symbol} "
                    f"{signal.position_size_usd}USD {signal.leverage}x")
         
         try:
@@ -403,7 +412,7 @@ class AITradeBridge:
                         break
             
             if has_same_position:
-                logger.info(f"[AIBridge] {signal.agent_name} 已有 {signal.symbol} 同方向持仓，跳过开仓")
+                logger.debug(f"[AIBridge] {signal.agent_name} 已有 {signal.symbol} 同方向持仓，跳过开仓")
                 return AITradeResult(
                     success=True,
                     mode=AITradeMode.SIMULATION,
@@ -415,7 +424,7 @@ class AITradeBridge:
                 for pos in open_positions:
                     if pos['symbol'] == signal.symbol and pos['side'] == 'short':
                         pnl = db.close_position(pos['id'], price)
-                        logger.info(f"[AIBridge] 平空仓 PnL: {pnl:.4f}")
+                        logger.debug(f"[AIBridge] 平空仓 PnL: {pnl:.4f}")
                 
                 # 开多仓
                 pos_id = db.open_position(
@@ -434,7 +443,7 @@ class AITradeBridge:
                 for pos in open_positions:
                     if pos['symbol'] == signal.symbol and pos['side'] == 'long':
                         pnl = db.close_position(pos['id'], price)
-                        logger.info(f"[AIBridge] 平多仓 PnL: {pnl:.4f}")
+                        logger.debug(f"[AIBridge] 平多仓 PnL: {pnl:.4f}")
                 
                 # 开空仓
                 pos_id = db.open_position(
@@ -453,14 +462,14 @@ class AITradeBridge:
                 for pos in open_positions:
                     if pos['symbol'] == signal.symbol and pos['side'] == 'long':
                         pnl = db.close_position(pos['id'], price)
-                        logger.info(f"[AIBridge] 平多仓 PnL: {pnl:.4f}")
+                        logger.debug(f"[AIBridge] 平多仓 PnL: {pnl:.4f}")
                         
             elif signal.signal == 'close_short':
                 # 平空仓
                 for pos in open_positions:
                     if pos['symbol'] == signal.symbol and pos['side'] == 'short':
                         pnl = db.close_position(pos['id'], price)
-                        logger.info(f"[AIBridge] 平空仓 PnL: {pnl:.4f}")
+                        logger.debug(f"[AIBridge] 平空仓 PnL: {pnl:.4f}")
             
             return AITradeResult(
                 success=True,

@@ -901,8 +901,9 @@ class AIDBManager:
         # 获取所有未平仓持仓
         open_positions = self.get_open_positions()
         
+        logger.info(f"[AIDBManager] 强制平仓: 找到 {len(open_positions)} 个未平仓持仓")
+        
         if not open_positions:
-            logger.info("[AIDBManager] 没有未平仓持仓需要平仓")
             return {'total_closed': 0, 'total_pnl': 0.0, 'details': []}
         
         # 如果没有提供价格，尝试获取

@@ -1077,7 +1077,9 @@ def update_bot_config(db_config: Optional[Dict[str, Any]] = None, **fields) -> N
         # 数据源模式（REST/WebSocket）
         'data_source_mode',
         # 扫描周期配置
-        'scan_timeframes'
+        'scan_timeframes',
+        # 持仓模式（cross=全仓, isolated=逐仓）
+        'td_mode'
     }
     
     # 过滤掉不在白名单中的字段

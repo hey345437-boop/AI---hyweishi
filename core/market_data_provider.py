@@ -210,7 +210,7 @@ class MarketDataProvider:
         if self.is_circuit_broken("ohlcv", symbol):
             if key in self.ohlcv_cache:
                 entry = self.ohlcv_cache[key]
-                logger.info(f"[md-circuit] {symbol} {timeframe} 熔断中，使用缓存")
+                logger.debug(f"[md-circuit] {symbol} {timeframe} 熔断中，使用缓存")
                 self.metrics["cache_hits"] += 1
                 return entry.data, True  # 熔断时标记为 stale
             raise Exception(f"[熔断中] 无缓存K线数据: {symbol} {timeframe}")
@@ -616,7 +616,7 @@ class MarketDataProvider:
         # 检查熔断
         if self.is_circuit_broken("ticker", symbol):
             if key in self.ticker_cache:
-                logger.info(f"[熔断中] 使用缓存的行情数据: {symbol}")
+                logger.debug(f"[熔断中] 使用缓存的行情数据: {symbol}")
                 self.metrics["cache_hits"] += 1
                 return self.ticker_cache[key][0]
             raise Exception(f"[熔断中] 无缓存行情数据: {symbol}")
@@ -685,7 +685,7 @@ class MarketDataProvider:
         # 检查熔断
         if self.is_circuit_broken("balance", "global"):
             if key in self.balance_cache:
-                logger.info(f"[熔断中] 使用缓存的余额数据")
+                logger.debug(f"[熔断中] 使用缓存的余额数据")
                 self.metrics["cache_hits"] += 1
                 return self.balance_cache[key][0]
             raise Exception(f"[熔断中] 无缓存余额数据")
@@ -754,7 +754,7 @@ class MarketDataProvider:
         # 检查熔断
         if self.is_circuit_broken("positions", "global"):
             if key in self.positions_cache:
-                logger.info(f"[熔断中] 使用缓存的持仓数据")
+                logger.debug(f"[熔断中] 使用缓存的持仓数据")
                 self.metrics["cache_hits"] += 1
                 return self.positions_cache[key][0]
             raise Exception(f"[熔断中] 无缓存持仓数据")
@@ -813,7 +813,7 @@ class MarketDataProvider:
         """
         if "balance" in self.balance_cache:
             del self.balance_cache["balance"]
-            logger.info("余额缓存已失效")
+            logger.debug("余额缓存已失效")
     
     def invalidate_positions(self):
         """
@@ -821,7 +821,7 @@ class MarketDataProvider:
         """
         if "positions" in self.positions_cache:
             del self.positions_cache["positions"]
-            logger.info("持仓缓存已失效")
+            logger.debug("持仓缓存已失效")
     
     def invalidate_ohlcv(self, symbol, timeframe=None, limit=None):
         """
@@ -854,7 +854,7 @@ class MarketDataProvider:
         """
         if symbol in self.ticker_cache:
             del self.ticker_cache[symbol]
-            logger.info(f"行情缓存已失效: {symbol}")
+            logger.debug(f"行情缓存已失效: {symbol}")
     
     def is_circuit_broken(self, endpoint, symbol):
         """
@@ -1131,7 +1131,7 @@ def create_market_data_exchange(use_market_key: bool = True):
         api_secret = market_secret
         api_passphrase = market_passphrase
         is_dedicated_key = True
-        logger.info("[MarketData] 使用独立行情 Key ")
+        logger.debug("[MarketData] 使用独立行情 Key ")
     else:
         api_key = trade_key
         api_secret = trade_secret
@@ -1139,7 +1139,7 @@ def create_market_data_exchange(use_market_key: bool = True):
         if use_market_key:
             logger.debug("[MarketData] 未配置独立行情 Key，使用交易 Key")
         else:
-            logger.info("[MarketData] 使用交易 Key")
+            logger.debug("[MarketData] 使用交易 Key")
     
     # 获取代理配置
     http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
@@ -1356,7 +1356,7 @@ class WebSocketMarketDataProvider:
         # 首次请求：用 REST 拉取完整历史数据
         if not cache_entry['initialized']:
             if fallback_to_rest and self.fallback_provider:
-                logger.info(f"[WS-Provider] 首次加载 {symbol} {timeframe}，使用 REST 拉取历史数据...")
+                logger.debug(f"[WS-Provider] 首次加载 {symbol} {timeframe}，使用 REST 拉取历史数据...")
                 data, is_stale = self.fallback_provider.get_ohlcv(symbol, timeframe, limit)
                 
                 if data and len(data) > 0:
@@ -1370,7 +1370,7 @@ class WebSocketMarketDataProvider:
                         if symbol not in self._subscribed_symbols:
                             self.subscribe(symbol, timeframe)
                     
-                    logger.info(f"[WS-Provider] {symbol} {timeframe} 历史数据已缓存: {len(data)} bars")
+                    logger.debug(f"[WS-Provider] {symbol} {timeframe} 历史数据已缓存: {len(data)} bars")
                     return data, False
                 else:
                     return [], False
@@ -1494,17 +1494,17 @@ class WebSocketMarketDataProvider:
             if symbol is None:
                 # 清除全部
                 self._history_cache.clear()
-                logger.info("[WS-Provider] 已清除全部历史数据缓存")
+                logger.debug("[WS-Provider] 已清除全部历史数据缓存")
             elif timeframe is None:
                 # 清除指定币种的全部周期
                 if symbol in self._history_cache:
                     del self._history_cache[symbol]
-                    logger.info(f"[WS-Provider] 已清除 {symbol} 的历史数据缓存")
+                    logger.debug(f"[WS-Provider] 已清除 {symbol} 的历史数据缓存")
             else:
                 # 清除指定币种的指定周期
                 if symbol in self._history_cache and timeframe in self._history_cache[symbol]:
                     del self._history_cache[symbol][timeframe]
-                    logger.info(f"[WS-Provider] 已清除 {symbol} {timeframe} 的历史数据缓存")
+                    logger.debug(f"[WS-Provider] 已清除 {symbol} {timeframe} 的历史数据缓存")
 
 
 def create_hybrid_market_data_provider(
@@ -1546,7 +1546,7 @@ def create_hybrid_market_data_provider(
             use_aws=use_aws,
             fallback_provider=rest_provider
         )
-        logger.info("[Hybrid] WebSocket 数据源已创建")
+        logger.debug("[Hybrid] WebSocket 数据源已创建")
     
     return rest_provider, ws_provider
 

@@ -73,6 +73,61 @@
 - **Multi-Strategy** - Built-in strategies + custom strategy development
 - **More Exchanges** - Binance, Bybit support coming soon
 
+---
+
+## Complete Trading Features
+
+### Supported Assets
+BTC, ETH, SOL, BNB, XRP, DOGE, GT, TRUMP, ADA, WLFI and other major cryptocurrencies. Trading pool is fully configurable in the interface.
+
+### Contract Type
+- **USDT Perpetual Contracts** - Settled in USDT
+- **Hedge Mode** - Support simultaneous long and short positions
+
+### Margin Mode
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| Cross | All positions share margin, shared risk | Higher capital efficiency, for experienced traders |
+| Isolated | Each position has independent margin | Single position liquidation won't affect others, better risk control |
+
+### Leverage Range
+- **Configurable Range**: 1x ~ 50x (adjustable in UI)
+- **Recommended**: 5x ~ 20x (balance risk and reward)
+- **Auto-Deleverage**: Advanced strategies auto-adjust based on ATR volatility
+
+### Order Types
+| Type | Description | Status |
+|------|-------------|--------|
+| Market Order | Immediate execution at current price | ✅ Supported |
+| Stop Loss | Auto-close when price triggers | ✅ Supported |
+| Take Profit | Auto-close when profit target reached | ✅ Supported |
+| Limit Order | Pending order at specified price | 🔜 Coming Soon |
+
+### Risk Control System
+- **Order Size Limit**: Maximum amount per single order
+- **Max Position**: Total position capped at percentage of equity
+- **Daily Loss Limit**: Auto-stop trading when daily loss threshold reached
+- **Cooldown Period**: Prevent same-direction entry after stop-loss
+
+---
+
+## Real-Time Monitoring
+
+### Web Dashboard
+- **Account Overview**: Equity, available balance, used margin
+- **Position Monitor**: Real-time PnL, leverage, liquidation price
+- **Charts**: Multi-timeframe candlesticks with technical indicators
+
+### AI Decision Logs
+- **Reasoning Process**: Transparent display of AI analysis
+- **Confidence Score**: Percentage confidence for each decision
+- **Historical Review**: Track past decision accuracy
+
+### Trade History
+- **Complete Records**: All entries, exits, stop-loss, take-profit events
+- **Timestamps**: Millisecond-precision trade times
+- **Statistics**: Auto-calculated win rate, profit factor, max drawdown
+
 ### (°∀°) Market Sentiment
 - **Fear & Greed Index** - Real-time market sentiment monitoring
 - **Long/Short Ratio** - Smart interpretation of market positioning
@@ -195,8 +250,17 @@ If this project helps you, consider buying the author a coffee (´▽`ʃ♡ƪ)
 
 ---
 
+## ⭐ Give it a Star
+
 <div align="center">
 
-**Made with (♥ω♥) by HyWeiShi**
+If you find this project helpful, please give it a **Star** ⭐
+
+It means a lot to a student developer like me (´;ω;`)
+
+Your support keeps me motivated to keep improving!
+
+[![GitHub stars](https://img.shields.io/github/stars/hey345437-boop/my-trading-bot-2?style=social)](https://github.com/hey345437-boop/my-trading-bot-2)
 
 </div>
+

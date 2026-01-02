@@ -487,6 +487,10 @@ Fear & Greed: {value} ({classification}) | 综合: {combined_score} ({bias_cn.ge
             position_size_usd = float(data.get("position_size_usd", 0))
             position_size_usd = max(0, position_size_usd)
             
+            # 如果仓位为 0 但是开仓信号，记录警告
+            if position_size_usd == 0 and action.startswith('open_'):
+                logger.warning(f"[{self.name}] 开仓信号但 position_size_usd=0，原始数据: {data}")
+            
             # 解析证据列表
             evidence = data.get("evidence", [])
             if not isinstance(evidence, list):

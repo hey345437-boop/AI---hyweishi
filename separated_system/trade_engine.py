@@ -833,7 +833,7 @@ def main():
                 "api_passphrase": api_passphrase,
                 "run_mode": run_mode,  # 传递运行模式
                 "market_type": OKX_MARKET_TYPE,
-                "td_mode": OKX_TD_MODE
+                "td_mode": bot_config.get('td_mode', OKX_TD_MODE)  # 优先使用数据库配置
                 # 注意：不再传递 sandbox，OKXAdapter 会强制禁用
             }
             
@@ -1661,6 +1661,9 @@ def main():
                                 side = "sell" if position.get("positionAmt") > 0 else "buy"
                                 posSide = "long" if position.get("positionAmt") > 0 else "short"
                                 try:
+                                    # 从数据库获取当前 td_mode 配置
+                                    _flatten_config = get_bot_config()
+                                    _td_mode = _flatten_config.get('td_mode', OKX_TD_MODE)
                                     order_result = exchange.create_order(
                                         symbol=symbol,
                                         side=side,
@@ -1668,7 +1671,7 @@ def main():
                                         order_type="market",
                                         params={
                                             "posSide": posSide,
-                                            "tdMode": OKX_TD_MODE,
+                                            "tdMode": _td_mode,
                                             "reduceOnly": True
                                         }
                                     )
@@ -2942,7 +2945,7 @@ def main():
                         "amount": position_value / curr_price,  # 修复：使用仓位价值计算币数量
                         "order_type": "market",
                         "posSide": "long" if signal_upper == "LONG" else "short",
-                        "tdMode": OKX_TD_MODE,
+                        "tdMode": bot_config.get('td_mode', OKX_TD_MODE),  # 使用数据库配置
                         "leverage": max_lev,
                         "candle_time": candle_time,
                         "is_hedge": is_hedge_order,

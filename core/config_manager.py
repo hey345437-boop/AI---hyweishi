@@ -179,7 +179,7 @@ class ConfigManager:
             # 热更新：同步更新 os.environ（让其他模块立即生效）
             self._update_environ(credentials)
             
-            logger.info(f"[ConfigManager] API 凭证已保存到 {SECRETS_FILE}")
+            logger.debug(f"[ConfigManager] API 凭证已保存到 {SECRETS_FILE}")
             return True
             
         except Exception as e:
@@ -212,7 +212,7 @@ class ConfigManager:
                 data = json.loads(json_data)
                 self._credentials = APICredentials.from_dict(data)
                 
-                logger.info(f"[ConfigManager] 从文件加载 API 凭证成功")
+                logger.debug(f"[ConfigManager] 从文件加载 API 凭证成功")
                 return self._credentials
                 
             except Exception as e:
@@ -254,7 +254,7 @@ class ConfigManager:
         if credentials.market_api_passphrase:
             os.environ["MARKET_DATA_PASSPHRASE"] = credentials.market_api_passphrase
         
-        logger.info("[ConfigManager] 环境变量已热更新")
+        logger.debug("[ConfigManager] 环境变量已热更新")
     
     def get_trade_credentials(self) -> Tuple[str, str, str]:
         """
@@ -310,7 +310,7 @@ class ConfigManager:
             if SECRETS_FILE.exists():
                 SECRETS_FILE.unlink()
             self._credentials = None
-            logger.info("[ConfigManager] 凭证已清除")
+            logger.debug("[ConfigManager] 凭证已清除")
             return True
         except Exception as e:
             logger.error(f"[ConfigManager] 清除凭证失败: {e}")

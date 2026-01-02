@@ -1565,6 +1565,25 @@ def render_sidebar(view_model, actions):
             
             st.markdown("##### 杠杆与仓位")
             
+            # 持仓模式选择
+            current_td_mode = bot_config.get('td_mode', 'cross')
+            td_mode_options = {"cross": "全仓模式", "isolated": "逐仓模式"}
+            col_mode1, col_mode2 = st.columns([1, 1])
+            with col_mode1:
+                new_td_mode = st.selectbox(
+                    "持仓模式",
+                    options=list(td_mode_options.keys()),
+                    format_func=lambda x: td_mode_options[x],
+                    index=0 if current_td_mode == 'cross' else 1,
+                    help="全仓：所有仓位共享保证金，风险共担\n逐仓：每个仓位独立保证金，风险隔离"
+                )
+            with col_mode2:
+                st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+                if current_td_mode == 'cross':
+                    st.caption("💡 全仓模式下爆仓会影响所有仓位")
+                else:
+                    st.caption("💡 逐仓模式下单个仓位爆仓不影响其他")
+            
             # P2修复: 杠杆设置(限制最大倍数)
             MAX_LEVERAGE = 50  # 安全上限
             new_leverage = st.slider(
@@ -1695,7 +1714,8 @@ def render_sidebar(view_model, actions):
                         hedge_tp_pct=new_hedge_tp,
                         max_position_pct=new_max_pos_pct,
                         custom_position_pct=new_custom_pct,
-                        custom_stop_loss_pct=new_stop_loss  # 保存自定义策略止损
+                        custom_stop_loss_pct=new_stop_loss,
+                        td_mode=new_td_mode
                     )
                     actions.get("set_control_flags", lambda **kwargs: None)(reload_config=1)
                     st.success("交易参数已保存")

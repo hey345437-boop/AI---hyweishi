@@ -37,13 +37,13 @@ def _load_saved_credentials():
             os.environ["OKX_API_KEY"] = creds.trade_api_key
             os.environ["OKX_API_SECRET"] = creds.trade_api_secret
             os.environ["OKX_API_PASSPHRASE"] = creds.trade_api_passphrase
-            logger.info("[config] 从配置文件加载交易 Key")
+            logger.debug("[config] 从配置文件加载交易 Key")
         
         if creds.has_market_key():
             os.environ["MARKET_DATA_API_KEY"] = creds.market_api_key
             os.environ["MARKET_DATA_SECRET"] = creds.market_api_secret
             os.environ["MARKET_DATA_PASSPHRASE"] = creds.market_api_passphrase
-            logger.info("[config] 从配置文件加载行情 Key")
+            logger.debug("[config] 从配置文件加载行情 Key")
             
     except ImportError:
         pass  # config_manager 未安装，使用环境变量

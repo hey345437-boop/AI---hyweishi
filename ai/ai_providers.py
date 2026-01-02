@@ -434,6 +434,7 @@ class UniversalAIClient:
             content = data.get("content", [])
             if content and isinstance(content, list):
                 return content[0].get("text", "")
+            logger.warning(f"[{self.provider.name}] Anthropic API 返回空内容")
             return ""
         elif self.provider.api_type == "google":
             candidates = data.get("candidates", [])
@@ -442,12 +443,20 @@ class UniversalAIClient:
                 parts = content.get("parts", [])
                 if parts:
                     return parts[0].get("text", "")
+            logger.warning(f"[{self.provider.name}] Google API 返回空内容")
             return ""
         else:
             # OpenAI 兼容格式
             choices = data.get("choices", [])
             if choices:
-                return choices[0].get("message", {}).get("content", "")
+                content = choices[0].get("message", {}).get("content", "")
+                if content:
+                    return content
+                # 内容为空
+                logger.warning(f"[{self.provider.name}] API 返回空 content")
+            else:
+                # choices 为空
+                logger.warning(f"[{self.provider.name}] API 返回空 choices: {str(data)[:200]}")
             return ""
     
     def _clean_response(self, content: str) -> str:

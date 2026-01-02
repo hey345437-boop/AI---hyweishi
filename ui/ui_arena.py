@@ -2245,6 +2245,8 @@ def render_command_center():
                     preset = PROMPT_PRESETS[selected_preset]
                     st.session_state.ai_preset_id = selected_preset
                     st.session_state.ai_custom_prompt = preset.prompt
+                    # 同步更新 text_area 的 widget 状态
+                    st.session_state.ai_prompt_input = preset.prompt
                     # 保存到数据库
                     if config_mgr:
                         config_mgr.set_preset(selected_preset)

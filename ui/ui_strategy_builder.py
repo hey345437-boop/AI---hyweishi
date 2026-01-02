@@ -2015,9 +2015,9 @@ def _run_backtest(
     
     try:
         from core.backtest_engine import get_backtest_engine, BacktestConfig
+        from core import backtest_engine
         
         # 重新创建引擎实例（确保代理配置最新）
-        import backtest_engine
         backtest_engine._backtest_engine = None
         engine = get_backtest_engine()
         

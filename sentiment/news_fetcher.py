@@ -221,12 +221,22 @@ class NewsFetcher:
                 executor.submit(self.fetch_rss, source, limit_per_source): source 
                 for source in sources
             }
-            for future in concurrent.futures.as_completed(futures, timeout=10):
-                try:
-                    news = future.result()
-                    all_news.extend(news)
-                except:
-                    pass
+            try:
+                for future in concurrent.futures.as_completed(futures, timeout=15):
+                    try:
+                        news = future.result(timeout=5)
+                        all_news.extend(news)
+                    except:
+                        pass
+            except concurrent.futures.TimeoutError:
+                # 超时时收集已完成的结果
+                for future in futures:
+                    if future.done():
+                        try:
+                            news = future.result(timeout=0)
+                            all_news.extend(news)
+                        except:
+                            pass
         
         # 按时间排序
         all_news.sort(key=lambda x: x.published_at, reverse=True)

@@ -768,15 +768,15 @@ class ArenaScheduler:
             signal = d.get('signal', '').lower()
             agent = d.get('agent_name', 'unknown')
             
-            # 详细日志：打印每个决策的完整信息
-            logger.info(f"[Arena] 检查决策: {agent} | signal={signal} | confidence={d.get('confidence')} | size={d.get('position_size_usd')} | error={d.get('error')}")
+            # 详细日志：打印每个决策的完整信息（改为 debug 避免刷屏）
+            logger.debug(f"[Arena] 检查决策: {agent} | signal={signal} | confidence={d.get('confidence')} | size={d.get('position_size_usd')} | error={d.get('error')}")
             
             # 检查是否是有效的交易信号
             if d.get('error') or signal not in valid_signals:
                 if d.get('error'):
                     logger.debug(f"[Arena] {agent} 跳过（有错误）: {d.get('error')}")
                 elif signal:
-                    logger.info(f"[Arena] {agent} 跳过（信号为 {signal}，不是交易信号）")
+                    logger.debug(f"[Arena] {agent} 跳过（信号为 {signal}，不是交易信号）")
                 continue
             
             # 统一信号格式
@@ -811,10 +811,18 @@ class ArenaScheduler:
                 size = d.get('position_size_usd') or 100
             else:
                 size = 0  # 平仓不需要仓位金额
-            confidence = d.get('confidence', 0.5)
+            confidence = d.get('confidence', 0)
             
-            # 添加详细日志
-            logger.info(f"[Arena] 准备执行 {agent} {signal_type} {symbol} | 置信度: {confidence:.0f}% | 仓位: {size} USD")
+            # P0修复: 置信度门槛检查 - 置信度为 0 或过低时不开仓
+            MIN_CONFIDENCE_THRESHOLD = 50  # 最低置信度门槛
+            if signal_type.startswith('open_') and confidence < MIN_CONFIDENCE_THRESHOLD:
+                logger.warning(
+                    f"[Arena] {agent} 跳过开仓 {symbol}：置信度 {confidence:.0f}% 低于门槛 {MIN_CONFIDENCE_THRESHOLD}%"
+                )
+                continue
+            
+            # 添加详细日志（改为 debug 避免刷屏）
+            logger.debug(f"[Arena] 准备执行 {agent} {signal_type} {symbol} | 置信度: {confidence:.0f}% | 仓位: {size} USD")
             
             # P1: 获取 decision_id 用于审计追踪
             decision_id = d.get('decision_id')
@@ -847,7 +855,7 @@ class ArenaScheduler:
                 
                 if result.success:
                     mode_str = "实盘" if result.mode == AITradeMode.LIVE else "模拟"
-                    logger.info(f"[Arena] {agent} {signal_type} {symbol} ({mode_str}) 执行成功")
+                    logger.debug(f"[Arena] {agent} {signal_type} {symbol} ({mode_str}) 执行成功")
                 else:
                     logger.warning(f"[Arena] {agent} {signal_type} {symbol} 执行失败: {result.message}")
             else:
