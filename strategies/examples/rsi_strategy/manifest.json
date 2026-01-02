@@ -1,0 +1,14 @@
+{
+  "strategy_id": "rsi_example",
+  "display_name": "📊 RSI 示例策略",
+  "class_name": "RSIStrategy",
+  "description": "RSI 超买超卖策略，教学示例",
+  "version": "1.0.0",
+  "order": 200,
+  "default_params": {
+    "position_pct": 2.0,
+    "leverage": 5,
+    "stop_loss_pct": 2.0,
+    "take_profit_pct": 4.0
+  }
+}

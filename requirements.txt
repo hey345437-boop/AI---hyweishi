@@ -1,0 +1,13 @@
+streamlit>=1.37.0
+streamlit-autorefresh>=1.0.1
+streamlit-lightweight-charts>=0.7.17
+pandas>=2.0.0
+# pandas-ta  # 可选，需要 Python 3.12+
+ccxt>=4.0.0
+requests>=2.31.0
+httpx>=0.28.0
+numpy>=1.24.0
+plotly>=5.0.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0
+cryptography>=40.0.0

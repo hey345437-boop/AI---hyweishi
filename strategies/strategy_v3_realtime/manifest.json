@@ -1,0 +1,11 @@
+{
+  "strategy_id": "strategy_v3_realtime",
+  "display_name": "⚡ 实时信号策略 v3 (布林带+ADX)",
+  "version": "1.0.0",
+  "description": "实时信号策略：布林带突破 + ADX趋势过滤，适用于WebSocket实时数据源",
+  "author": "Trading Bot",
+  "class_name": "RealtimeStrategy",
+  "order": 2,
+  "signal_mode": "realtime",
+  "recommended_data_source": "WebSocket"
+}

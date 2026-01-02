@@ -1,0 +1,49 @@
+# -*- coding: utf-8 -*-
+# ============================================================================
+#    何以为势 - Quantitative Trading System
+#    Docker Compose 配置
+# ============================================================================
+
+version: '3.8'
+
+services:
+  trading-bot:
+    build: .
+    container_name: hyweishi-trading-bot
+    ports:
+      - "8501:8501"   # Streamlit UI
+      - "8000:8000"   # Market API
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    environment:
+      - RUN_MODE=${RUN_MODE:-paper}
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # 可选：后端交易引擎（独立运行）
+  trade-engine:
+    build: .
+    container_name: hyweishi-trade-engine
+    command: python separated_system/trade_engine.py
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    environment:
+      - RUN_MODE=${RUN_MODE:-paper}
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    depends_on:
+      - trading-bot
+    profiles:
+      - full  # 只在 --profile full 时启动

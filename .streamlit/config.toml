@@ -1,0 +1,22 @@
+[server]
+headless = true
+port = 10000
+enableCORS = false
+enableXsrfProtection = false
+
+[logger]
+level = "error"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showSidebarNavigation = true
+
+[theme]
+base="dark"
+primaryColor="#FF2C55"
+backgroundColor="#0F1115"
+secondaryBackgroundColor="#151823"
+textColor="#E6E6E6"
+font="sans serif"

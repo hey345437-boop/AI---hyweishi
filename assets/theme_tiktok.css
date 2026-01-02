@@ -1,0 +1,196 @@
+/* 抖音风格主题CSS */
+
+/* 全局样式 */
+[data-testid="stApp"] {
+    background-color: #0F1115;
+    color: #E6E6E6;
+}
+
+/* 卡片样式 */
+.st-card, .st-emotion-cache-1wivap2, .st-emotion-cache-1v0mbdj {
+    background-color: #151823 !important;
+    border-radius: 16px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Sidebar 样式 */
+[data-testid="stSidebar"] {
+    background-color: #0F1115 !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+[data-testid="stSidebarNav"] a {
+    color: #E6E6E6 !important;
+    border-radius: 8px !important;
+    margin: 2px 8px !important;
+}
+
+[data-testid="stSidebarNav"] a:hover {
+    background-color: rgba(255, 44, 85, 0.1) !important;
+    color: #FF2C55 !important;
+}
+
+/* 按钮样式 */
+.stButton button {
+    border-radius: 12px !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+}
+
+/* 主按钮 */
+.stButton button[kind="primary"] {
+    background: linear-gradient(135deg, #FF2C55 0%, #00F5FF 100%) !important;
+    border: none !important;
+    color: white !important;
+    box-shadow: 0 4px 16px rgba(255, 44, 85, 0.3) !important;
+}
+
+.stButton button[kind="primary"]:hover {
+    box-shadow: 0 8px 24px rgba(255, 44, 85, 0.5) !important;
+    transform: translateY(-2px) !important;
+}
+
+.stButton button[kind="primary"]:active {
+    transform: translateY(0) !important;
+}
+
+/* 次按钮 */
+.stButton button:not([kind="primary"]):not([disabled]) {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    color: #E6E6E6 !important;
+}
+
+.stButton button:not([kind="primary"]):not([disabled]):hover {
+    background-color: rgba(255, 255, 255, 0.15) !important;
+    border-color: rgba(255, 255, 255, 0.3) !important;
+}
+
+/* 禁用按钮 */
+.stButton button[disabled] {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(255, 255, 255, 0.1) !important;
+    color: rgba(255, 255, 255, 0.3) !important;
+    cursor: not-allowed !important;
+}
+
+/* 输入框样式 */
+.stTextInput > div > div > input, .stNumberInput > div > div > input, .stTextArea > div > div > textarea {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+    color: #E6E6E6 !important;
+}
+
+/* 选择框样式 */
+.stSelectbox > div > div > select, .stMultiSelect > div > div > select {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 8px !important;
+    color: #E6E6E6 !important;
+}
+
+/* 滑块样式 */
+.stSlider > div > div > div > div {
+    background-color: #FF2C55 !important;
+}
+
+/* 标题样式 */
+.stTitle, .stHeader, .stSubheader {
+    color: #E6E6E6 !important;
+}
+
+/* 文本样式 */
+.stMarkdown, .stText, .st-emotion-cache-16idsys {
+    color: #E6E6E6 !important;
+}
+
+/* 中间大画布容器（视频区域风格） */
+.tiktok-canvas-container {
+    background-color: #0A0B0E !important;
+    border-radius: 20px !important;
+    padding: 16px !important;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid rgba(255, 44, 85, 0.1) !important;
+    margin: 16px 0 !important;
+}
+
+/* K线图容器 */
+.tiktok-chart-container {
+    background-color: #0A0B0E !important;
+    border-radius: 16px !important;
+    padding: 8px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* 指标卡片 */
+.stMetric {
+    background-color: #151823 !important;
+    border-radius: 12px !important;
+    padding: 12px !important;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2) !important;
+}
+
+.stMetric label {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+.stMetric value {
+    color: #E6E6E6 !important;
+}
+
+/* 进度条样式 */
+.stProgress > div > div > div > div {
+    background: linear-gradient(90deg, #FF2C55 0%, #00F5FF 100%) !important;
+}
+
+/* 表格样式 */
+.stDataFrame, .st-emotion-cache-1w7e6r4 {
+    background-color: #151823 !important;
+    border-radius: 12px !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.stDataFrame th {
+    background-color: rgba(255, 44, 85, 0.1) !important;
+    color: #E6E6E6 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.stDataFrame td {
+    background-color: transparent !important;
+    color: #E6E6E6 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* 分割线样式 */
+.stDivider {
+    border-color: rgba(255, 255, 255, 0.05) !important;
+}
+
+/* 通知样式 */
+.stAlert {
+    border-radius: 12px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.stAlert.success {
+    background-color: rgba(0, 255, 0, 0.05) !important;
+    border-left-color: #00FF00 !important;
+}
+
+.stAlert.error {
+    background-color: rgba(255, 44, 85, 0.05) !important;
+    border-left-color: #FF2C55 !important;
+}
+
+.stAlert.warning {
+    background-color: rgba(255, 255, 0, 0.05) !important;
+    border-left-color: #FFFF00 !important;
+}
+
+.stAlert.info {
+    background-color: rgba(0, 245, 255, 0.05) !important;
+    border-left-color: #00F5FF !important;
+}
