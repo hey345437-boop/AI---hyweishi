@@ -72,22 +72,60 @@ class LocalPaperBroker:
     本地模拟撮合器
     
     用于 paper_on_real 模式，拦截所有交易请求并在本地模拟
+    支持市价单和限价单
     """
     
     def __init__(self):
         self.orders: List[PaperOrder] = []
+        self.pending_orders: Dict[str, PaperOrder] = {}  # 挂单（限价单）
         self._order_counter = 0
     
     def create_order(self, symbol: str, side: str, amount: float, 
                      order_type: str = 'market', price: float = 0,
                      params: Optional[Dict] = None) -> Dict:
-        """模拟下单"""
+        """模拟下单 - 支持市价单和限价单"""
         self._order_counter += 1
         order_id = f"paper_{int(time.time()*1000)}_{self._order_counter}"
         
         pos_side = params.get('posSide', '') if params else ''
         reduce_only = params.get('reduceOnly', False) if params else False
         
+        # 限价单处理
+        if order_type == 'limit':
+            if price <= 0:
+                raise ValueError("限价单必须指定价格")
+            
+            order = PaperOrder(
+                order_id=order_id,
+                symbol=symbol,
+                side=side,
+                amount=amount,
+                price=price,
+                order_type=order_type,
+                status='open',  # 限价单初始状态为 open
+                timestamp=int(time.time() * 1000),
+                pos_side=pos_side,
+                reduce_only=reduce_only
+            )
+            self.pending_orders[order_id] = order
+            self.orders.append(order)
+            
+            return {
+                'id': order_id,
+                'clientOrderId': params.get('clOrdId', '') if params else '',
+                'symbol': symbol,
+                'side': side,
+                'type': order_type,
+                'amount': amount,
+                'price': price,
+                'status': 'open',
+                'filled': 0,
+                'remaining': amount,
+                'timestamp': order.timestamp,
+                'info': {'paper': True, 'posSide': pos_side, 'orderType': 'limit'}
+            }
+        
+        # 市价单处理 - 立即成交
         order = PaperOrder(
             order_id=order_id,
             symbol=symbol,
@@ -95,13 +133,13 @@ class LocalPaperBroker:
             amount=amount,
             price=price,
             order_type=order_type,
+            status='filled',
             timestamp=int(time.time() * 1000),
             pos_side=pos_side,
             reduce_only=reduce_only
         )
         self.orders.append(order)
         
-        # 返回类似 ccxt 的订单结构
         return {
             'id': order_id,
             'clientOrderId': params.get('clOrdId', '') if params else '',
@@ -117,8 +155,54 @@ class LocalPaperBroker:
             'info': {'paper': True, 'posSide': pos_side}
         }
     
+    def check_and_fill_limit_orders(self, symbol: str, current_price: float) -> List[Dict]:
+        """检查并成交限价单（根据当前价格）"""
+        filled_orders = []
+        orders_to_remove = []
+        
+        for order_id, order in self.pending_orders.items():
+            if order.symbol != symbol:
+                continue
+            
+            should_fill = False
+            # 买单：当前价格 <= 限价
+            if order.side == 'buy' and current_price <= order.price:
+                should_fill = True
+            # 卖单：当前价格 >= 限价
+            elif order.side == 'sell' and current_price >= order.price:
+                should_fill = True
+            
+            if should_fill:
+                order.status = 'filled'
+                orders_to_remove.append(order_id)
+                filled_orders.append({
+                    'id': order_id,
+                    'symbol': order.symbol,
+                    'side': order.side,
+                    'amount': order.amount,
+                    'price': order.price,
+                    'filled_price': current_price,
+                    'status': 'filled'
+                })
+        
+        for order_id in orders_to_remove:
+            del self.pending_orders[order_id]
+        
+        return filled_orders
+    
     def cancel_order(self, order_id: str, symbol: str = None) -> Dict:
         """模拟撤单"""
+        # 如果是挂单，从 pending_orders 中移除
+        if order_id in self.pending_orders:
+            order = self.pending_orders.pop(order_id)
+            order.status = 'canceled'
+            return {
+                'id': order_id,
+                'symbol': order.symbol,
+                'status': 'canceled',
+                'info': {'paper': True}
+            }
+        
         return {
             'id': order_id,
             'symbol': symbol,
@@ -126,20 +210,41 @@ class LocalPaperBroker:
             'info': {'paper': True}
         }
     
-    def get_orders(self) -> List[Dict]:
-        """获取所有模拟订单"""
-        return [
-            {
+    def get_orders(self, status: str = None) -> List[Dict]:
+        """获取模拟订单列表"""
+        orders = []
+        for o in self.orders:
+            if status and o.status != status:
+                continue
+            orders.append({
                 'id': o.order_id,
                 'symbol': o.symbol,
                 'side': o.side,
                 'amount': o.amount,
                 'price': o.price,
+                'type': o.order_type,
                 'status': o.status,
                 'timestamp': o.timestamp
-            }
-            for o in self.orders
-        ]
+            })
+        return orders
+    
+    def get_open_orders(self, symbol: str = None) -> List[Dict]:
+        """获取未成交的挂单"""
+        orders = []
+        for order_id, order in self.pending_orders.items():
+            if symbol and order.symbol != symbol:
+                continue
+            orders.append({
+                'id': order_id,
+                'symbol': order.symbol,
+                'side': order.side,
+                'amount': order.amount,
+                'price': order.price,
+                'type': order.order_type,
+                'status': order.status,
+                'timestamp': order.timestamp
+            })
+        return orders
 
 
 # 安全的日志流处理器
@@ -653,16 +758,33 @@ class OKXAdapter(ExchangeAdapter):
         return f"{side[0]}_{base}_{ts}_{uid}"
     
     def create_order(self, symbol: str, side: str, amount: float, order_type: str = 'market', 
-                     params: Optional[Dict] = None, reduce_only: bool = False) -> Any:
+                     price: float = None, params: Optional[Dict] = None, reduce_only: bool = False) -> Any:
         """
         下单 - 根据 run_mode 路由到实盘或本地模拟
         
-        - live 模式: 调用 OKX 实盘下单
-        - paper_on_real 模式: 路由到 LocalPaperBroker 本地模拟
+        支持订单类型:
+        - market: 市价单（立即成交）
+        - limit: 限价单（挂单等待成交）
+        
+        参数:
+        - symbol: 交易对
+        - side: 'buy' 或 'sell'
+        - amount: 数量
+        - order_type: 'market' 或 'limit'
+        - price: 限价单价格（limit 订单必填）
+        - params: 额外参数
+        - reduce_only: 是否只减仓
+        
+        返回:
+        - 订单信息字典
         """
         try:
             if self.exchange is None:
                 self.initialize()
+            
+            # 限价单必须指定价格
+            if order_type == 'limit' and (price is None or price <= 0):
+                raise ValueError("限价单必须指定有效价格 (price > 0)")
             
             # 风控检查
             validation_result = self.risk_control.validate_order(amount, symbol)
@@ -685,40 +807,38 @@ class OKXAdapter(ExchangeAdapter):
             # 关键路由：根据 run_mode 决定是否真实下单
             if self.run_mode == 'paper':
                 # paper 模式：路由到本地模拟
+                order_price = price
+                if order_type == 'market':
+                    # 市价单获取当前价格
+                    try:
+                        ticker = self.exchange.fetch_ticker(normalized_symbol)
+                        order_price = ticker.get('last', 0)
+                    except:
+                        order_price = 0
+                
                 logger.warning(
                     f"[paper] blocked_real_trade op=create_order "
                     f"symbol={normalized_symbol} side={side} amount={amount} "
-                    f"reason=paper_mode"
+                    f"type={order_type} price={order_price} reason=paper_mode"
                 )
-                print(
-                    f"[paper] blocked_real_trade op=create_order "
-                    f"symbol={normalized_symbol} side={side} amount={amount} "
-                    f"reason=paper_mode"
-                )
-                
-                # 获取当前价格用于模拟
-                try:
-                    ticker = self.exchange.fetch_ticker(normalized_symbol)
-                    price = ticker.get('last', 0)
-                except:
-                    price = 0
                 
                 return self.paper_broker.create_order(
                     symbol=normalized_symbol,
                     side=side,
                     amount=amount,
                     order_type=order_type,
-                    price=price,
+                    price=order_price,
                     params=params
                 )
             else:
                 # live 模式：调用 OKX 实盘
                 logger.info(
-                    f"[LIVE] Creating order: {side} {amount} {normalized_symbol} ({order_type}) "
-                    f"clOrdId={params.get('clOrdId')} reduceOnly={params.get('reduceOnly', False)}"
+                    f"[LIVE] Creating order: {side} {amount} {normalized_symbol} "
+                    f"({order_type}) price={price} clOrdId={params.get('clOrdId')} "
+                    f"reduceOnly={params.get('reduceOnly', False)}"
                 )
                 return self.exchange.create_order(
-                    normalized_symbol, order_type, side, amount, price=None, params=params
+                    normalized_symbol, order_type, side, amount, price=price, params=params
                 )
                 
         except ValueError:
@@ -736,7 +856,51 @@ class OKXAdapter(ExchangeAdapter):
     def create_market_order(self, symbol: str, side: str, amount: float, 
                             params: Optional[Dict] = None, reduce_only: bool = False) -> Any:
         """创建市价单"""
-        return self.create_order(symbol, side, amount, 'market', params, reduce_only)
+        return self.create_order(symbol, side, amount, 'market', price=None, params=params, reduce_only=reduce_only)
+    
+    def create_limit_order(self, symbol: str, side: str, amount: float, price: float,
+                           params: Optional[Dict] = None, reduce_only: bool = False) -> Any:
+        """
+        创建限价单
+        
+        参数:
+        - symbol: 交易对
+        - side: 'buy' 或 'sell'
+        - amount: 数量
+        - price: 限价（必填）
+        - params: 额外参数
+        - reduce_only: 是否只减仓
+        
+        返回:
+        - 订单信息字典
+        """
+        if price is None or price <= 0:
+            raise ValueError("限价单必须指定有效价格 (price > 0)")
+        return self.create_order(symbol, side, amount, 'limit', price=price, params=params, reduce_only=reduce_only)
+    
+    def create_stop_limit_order(self, symbol: str, side: str, amount: float, 
+                                price: float, stop_price: float,
+                                params: Optional[Dict] = None) -> Any:
+        """
+        创建止损限价单
+        
+        参数:
+        - symbol: 交易对
+        - side: 'buy' 或 'sell'
+        - amount: 数量
+        - price: 触发后的限价
+        - stop_price: 触发价格
+        - params: 额外参数
+        
+        返回:
+        - 订单信息字典
+        """
+        if params is None:
+            params = {}
+        params['stopPrice'] = stop_price
+        params['triggerPrice'] = stop_price
+        
+        return self.create_order(symbol, side, amount, 'limit', price=price, params=params)
     
     def create_close_order(self, symbol: str, side: str, amount: float, 
                            params: Optional[Dict] = None) -> Any:
@@ -1074,3 +1238,158 @@ class OKXAdapter(ExchangeAdapter):
     def get_paper_orders(self) -> List[Dict]:
         """获取模拟订单列表（仅 paper_on_real 模式）"""
         return self.paper_broker.get_orders()
+    
+    def fetch_open_orders(self, symbol: str = None) -> List[Dict]:
+        """
+        获取未成交的挂单
+        
+        参数:
+        - symbol: 交易对（可选，不指定则获取所有）
+        
+        返回:
+        - 挂单列表
+        """
+        try:
+            if self.exchange is None:
+                self.initialize()
+            
+            normalized_symbol = self.normalize_symbol(symbol) if symbol else None
+            
+            if self.run_mode == 'paper':
+                return self.paper_broker.get_open_orders(normalized_symbol)
+            else:
+                logger.debug(f"Fetching open orders for {normalized_symbol or 'all symbols'}")
+                return self.exchange.fetch_open_orders(normalized_symbol)
+                
+        except Exception as e:
+            logger.error(f"Error fetching open orders: {e}")
+            raise
+    
+    def fetch_order(self, order_id: str, symbol: str = None) -> Dict:
+        """
+        获取订单详情
+        
+        参数:
+        - order_id: 订单 ID
+        - symbol: 交易对
+        
+        返回:
+        - 订单信息字典
+        """
+        try:
+            if self.exchange is None:
+                self.initialize()
+            
+            normalized_symbol = self.normalize_symbol(symbol) if symbol else None
+            
+            if self.run_mode == 'paper':
+                # 从模拟订单中查找
+                for order in self.paper_broker.orders:
+                    if order.order_id == order_id:
+                        return {
+                            'id': order.order_id,
+                            'symbol': order.symbol,
+                            'side': order.side,
+                            'amount': order.amount,
+                            'price': order.price,
+                            'type': order.order_type,
+                            'status': order.status,
+                            'timestamp': order.timestamp,
+                            'info': {'paper': True}
+                        }
+                return None
+            else:
+                logger.debug(f"Fetching order {order_id} for {normalized_symbol}")
+                return self.exchange.fetch_order(order_id, normalized_symbol)
+                
+        except Exception as e:
+            logger.error(f"Error fetching order {order_id}: {e}")
+            raise
+    
+    def edit_order(self, order_id: str, symbol: str, order_type: str, side: str,
+                   amount: float = None, price: float = None, params: Optional[Dict] = None) -> Dict:
+        """
+        修改订单（仅支持限价单）
+        
+        参数:
+        - order_id: 订单 ID
+        - symbol: 交易对
+        - order_type: 订单类型
+        - side: 方向
+        - amount: 新数量（可选）
+        - price: 新价格（可选）
+        - params: 额外参数
+        
+        返回:
+        - 修改后的订单信息
+        """
+        try:
+            if self.exchange is None:
+                self.initialize()
+            
+            normalized_symbol = self.normalize_symbol(symbol)
+            
+            if self.run_mode == 'paper':
+                # 模拟模式：撤销旧单，创建新单
+                if order_id in self.paper_broker.pending_orders:
+                    old_order = self.paper_broker.pending_orders[order_id]
+                    new_amount = amount if amount is not None else old_order.amount
+                    new_price = price if price is not None else old_order.price
+                    
+                    # 撤销旧单
+                    self.paper_broker.cancel_order(order_id)
+                    
+                    # 创建新单
+                    return self.paper_broker.create_order(
+                        symbol=normalized_symbol,
+                        side=side,
+                        amount=new_amount,
+                        order_type=order_type,
+                        price=new_price,
+                        params=params
+                    )
+                else:
+                    raise ValueError(f"订单 {order_id} 不存在或已成交")
+            else:
+                logger.info(f"[LIVE] Editing order {order_id}: amount={amount}, price={price}")
+                return self.exchange.edit_order(
+                    order_id, normalized_symbol, order_type, side, amount, price, params
+                )
+                
+        except Exception as e:
+            logger.error(f"Error editing order {order_id}: {e}")
+            raise
+    
+    def cancel_all_orders(self, symbol: str = None) -> List[Dict]:
+        """
+        撤销所有挂单
+        
+        参数:
+        - symbol: 交易对（可选，不指定则撤销所有）
+        
+        返回:
+        - 撤销的订单列表
+        """
+        try:
+            if self.exchange is None:
+                self.initialize()
+            
+            normalized_symbol = self.normalize_symbol(symbol) if symbol else None
+            
+            if self.run_mode == 'paper':
+                canceled = []
+                orders_to_cancel = list(self.paper_broker.pending_orders.keys())
+                for order_id in orders_to_cancel:
+                    order = self.paper_broker.pending_orders.get(order_id)
+                    if order and (normalized_symbol is None or order.symbol == normalized_symbol):
+                        result = self.paper_broker.cancel_order(order_id)
+                        canceled.append(result)
+                logger.warning(f"[paper] Canceled {len(canceled)} orders")
+                return canceled
+            else:
+                logger.info(f"[LIVE] Cancelling all orders for {normalized_symbol or 'all symbols'}")
+                return self.exchange.cancel_all_orders(normalized_symbol)
+                
+        except Exception as e:
+            logger.error(f"Error cancelling all orders: {e}")
+            raise

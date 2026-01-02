@@ -843,12 +843,32 @@ class ArenaScheduler:
                 take_profit = d.get('take_profit')
                 rr_estimate = d.get('rr_estimate')
                 
+                # 从 bot_config 读取订单类型配置
+                order_type = 'market'  # 默认市价单
+                entry_price_for_limit = None
+                try:
+                    from database.db_bridge import get_bot_config
+                    bot_config = get_bot_config()
+                    order_type = bot_config.get('order_type', 'market')
+                    
+                    # 限价单需要计算入场价格
+                    if order_type == 'limit' and price:
+                        limit_offset = float(bot_config.get('limit_price_offset', 0))
+                        # 买入时价格偏低更有利，卖出时价格偏高更有利
+                        if signal_type in ['open_long', 'close_short']:
+                            entry_price_for_limit = price * (1 - limit_offset)
+                        else:  # open_short, close_long
+                            entry_price_for_limit = price * (1 + limit_offset)
+                except Exception as e:
+                    logger.debug(f"[Arena] 读取订单类型配置失败: {e}，使用默认市价单")
+                
                 trade_signal = AITradeSignal(
                     agent_name=agent,
                     symbol=symbol,
                     signal=signal_type,
                     confidence=confidence,
-                    entry_price=price,
+                    entry_price=entry_price_for_limit if order_type == 'limit' else price,
+                    entry_type=order_type,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
                     rr_estimate=rr_estimate,
@@ -862,7 +882,8 @@ class ArenaScheduler:
                 
                 if result.success:
                     mode_str = "实盘" if result.mode == AITradeMode.LIVE else "模拟"
-                    logger.debug(f"[Arena] {agent} {signal_type} {symbol} ({mode_str}) 执行成功")
+                    order_type_str = "限价" if order_type == 'limit' else "市价"
+                    logger.debug(f"[Arena] {agent} {signal_type} {symbol} ({mode_str}/{order_type_str}) 执行成功")
                 else:
                     logger.warning(f"[Arena] {agent} {signal_type} {symbol} 执行失败: {result.message}")
             else:

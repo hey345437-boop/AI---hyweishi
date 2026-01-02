@@ -1584,6 +1584,53 @@ def render_sidebar(view_model, actions):
                 else:
                     st.caption("💡 逐仓模式下单个仓位爆仓不影响其他")
             
+            # 订单类型选择
+            st.markdown("##### 订单类型")
+            current_order_type = bot_config.get('order_type', 'market')
+            order_type_options = {"market": "市价单", "limit": "限价单"}
+            col_order1, col_order2 = st.columns([1, 1])
+            with col_order1:
+                new_order_type = st.selectbox(
+                    "下单方式",
+                    options=list(order_type_options.keys()),
+                    format_func=lambda x: order_type_options[x],
+                    index=0 if current_order_type == 'market' else 1,
+                    help="市价单：立即成交，价格可能有滑点\n限价单：指定价格挂单，可能不成交"
+                )
+            with col_order2:
+                st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+                if new_order_type == 'market':
+                    st.caption("💡 市价单立即成交，适合追求速度")
+                else:
+                    st.caption("💡 限价单可控制成本，但可能错过行情")
+            
+            # 限价单参数（仅在选择限价单时显示）
+            current_limit_offset = bot_config.get('limit_price_offset', 0.0)
+            if new_order_type == 'limit':
+                col_limit1, col_limit2 = st.columns([1, 1])
+                with col_limit1:
+                    new_limit_offset = st.number_input(
+                        "限价偏移(%)",
+                        min_value=-1.0,
+                        max_value=1.0,
+                        value=float(current_limit_offset * 100),
+                        step=0.05,
+                        help="相对当前价格的偏移\n正数：更有利的价格（可能不成交）\n负数：更容易成交（牺牲价格）\n0：使用当前价格"
+                    ) / 100
+                with col_limit2:
+                    current_limit_timeout = bot_config.get('limit_order_timeout', 60)
+                    new_limit_timeout = st.number_input(
+                        "挂单超时(秒)",
+                        min_value=10,
+                        max_value=300,
+                        value=int(current_limit_timeout),
+                        step=10,
+                        help="限价单未成交超过此时间自动撤单"
+                    )
+            else:
+                new_limit_offset = current_limit_offset
+                new_limit_timeout = bot_config.get('limit_order_timeout', 60)
+            
             # P2修复: 杠杆设置(限制最大倍数)
             MAX_LEVERAGE = 50  # 安全上限
             new_leverage = st.slider(
@@ -1715,7 +1762,10 @@ def render_sidebar(view_model, actions):
                         max_position_pct=new_max_pos_pct,
                         custom_position_pct=new_custom_pct,
                         custom_stop_loss_pct=new_stop_loss,
-                        td_mode=new_td_mode
+                        td_mode=new_td_mode,
+                        order_type=new_order_type,
+                        limit_price_offset=new_limit_offset,
+                        limit_order_timeout=new_limit_timeout
                     )
                     actions.get("set_control_flags", lambda **kwargs: None)(reload_config=1)
                     st.success("交易参数已保存")
@@ -1723,10 +1773,11 @@ def render_sidebar(view_model, actions):
                     st.error(f"保存失败: {str(e)[:50]}")
             
             # 显示当前参数摘要
+            order_type_label = "市价" if new_order_type == 'market' else "限价"
             if is_custom:
-                st.caption(f"当前: {new_leverage}x杠杆 | 最大仓位{new_max_pos_pct*100:.0f}% | 开仓{new_custom_pct*100:.1f}% | 止盈{new_hard_tp*100:.1f}% | 止损{new_stop_loss*100:.1f}%")
+                st.caption(f"当前: {new_leverage}x杠杆 | {order_type_label}单 | 最大仓位{new_max_pos_pct*100:.0f}% | 开仓{new_custom_pct*100:.1f}% | 止盈{new_hard_tp*100:.1f}% | 止损{new_stop_loss*100:.1f}%")
             else:
-                st.caption(f"当前: {new_leverage}x杠杆 | 最大仓位{new_max_pos_pct*100:.0f}% | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}% | 对冲{new_hedge_pct*100:.1f}%")
+                st.caption(f"当前: {new_leverage}x杠杆 | {order_type_label}单 | 最大仓位{new_max_pos_pct*100:.0f}% | 主仓{new_main_pct*100:.1f}% | 次仓{new_sub_pct*100:.1f}% | 对冲{new_hedge_pct*100:.1f}%")
         
         # 高级策略配置面板
         try:

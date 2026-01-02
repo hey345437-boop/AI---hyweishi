@@ -1079,7 +1079,11 @@ def update_bot_config(db_config: Optional[Dict[str, Any]] = None, **fields) -> N
         # 扫描周期配置
         'scan_timeframes',
         # 持仓模式（cross=全仓, isolated=逐仓）
-        'td_mode'
+        'td_mode',
+        # 订单类型配置（market=市价单, limit=限价单）
+        'order_type', 'limit_price_offset', 'limit_order_timeout',
+        # 新手引导和免责声明
+        'disclaimer_accepted', 'onboarding_completed'
     }
     
     # 过滤掉不在白名单中的字段
