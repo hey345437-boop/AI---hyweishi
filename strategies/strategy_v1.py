@@ -177,7 +177,7 @@ class TradingStrategyV1:
         DX = 100 * abs(DIPlus - DIMinus) / (DIPlus + DIMinus).replace(0, 1)
         
         # 使用 Numba 加速的 WMA
-        from strategy_v2 import _wma_numba
+        from strategies.strategy_v2 import _wma_numba
         dx_values = DX.fillna(0).values.astype(np.float64)
         df['trend_adx'] = pd.Series(_wma_numba(dx_values, len_adx), index=df.index)
         df['adx_slope'] = df['trend_adx'].diff()
@@ -247,7 +247,7 @@ class TradingStrategyV1:
         df['parsed_low'] = parsedLow
         
         # 使用 Numba 加速的摆动点检测
-        from strategy_v2 import _swing_detection_numba
+        from strategies.strategy_v2 import _swing_detection_numba
         parsed_high_arr = parsedHigh.astype(np.float64) if isinstance(parsedHigh, np.ndarray) else parsedHigh
         parsed_low_arr = parsedLow.astype(np.float64) if isinstance(parsedLow, np.ndarray) else parsedLow
         
