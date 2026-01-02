@@ -30,7 +30,7 @@
 
 <br/>
 
-[中文文档](README.md) | [English](#features) | [Quick Start](#quick-start) | [AI Models](#supported-ai-models)
+[中文文档](README.md) | [English](#features) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Quick Start](#quick-start) | [AI Models](#supported-ai-models)
 
 </div>
 

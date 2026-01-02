@@ -30,7 +30,7 @@
 
 <br/>
 
-[中文文档](#功能特性) | [English](README.en.md) | [快速开始](#快速开始) | [AI 模型](#支持的-ai-模型)
+[中文文档](#功能特性) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [快速开始](#快速开始) | [AI 模型](#支持的-ai-模型)
 
 </div>
 
