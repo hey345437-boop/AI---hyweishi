@@ -9,15 +9,15 @@
 <br/><br/>
 
 <pre>
-██�? ██╗██╗   ██╗██╗    ██╗███████╗██╗███████╗██�? ██╗██╗
-██�? ██║╚██�?██╔╝██�?   ██║██╔════╝██║██╔════╝██�? ██║██║
-███████║ ╚████╔�?██�?█╗ ██║█████�? ██║███████╗███████║██║
-██╔══██║  ╚██╔�? ██║███╗██║██╔══╝  ██║╚════██║██╔══██║██║
-██�? ██�?  ██�?  ╚███╔███╔╝███████╗██║███████║██║  ██║██║
-╚═�? ╚═�?  ╚═�?   ╚══╝╚══╝ ╚══════╝╚═╝╚══════╝╚═╝  ╚═╝╚═╝
+██╗  ██╗██╗   ██╗██╗    ██╗███████╗██╗███████╗██╗  ██╗██╗
+██║  ██║╚██╗ ██╔╝██║    ██║██╔════╝██║██╔════╝██║  ██║██║
+███████║ ╚████╔╝ ██║ █╗ ██║█████╗  ██║███████╗███████║██║
+██╔══██║  ╚██╔╝  ██║███╗██║██╔══╝  ██║╚════██║██╔══██║██║
+██║  ██║   ██║   ╚███╔███╔╝███████╗██║███████║██║  ██║██║
+╚═╝  ╚═╝   ╚═╝    ╚══╝╚══╝ ╚══════╝╚═╝╚══════╝╚═╝  ╚═╝╚═╝
 </pre>
 
-**(*≧▽�? AI-Powered Cryptocurrency Futures Trading Engine**
+**(*≧▽≦) AI-Powered Cryptocurrency Futures Trading Engine**
 
 *Let AI be your trading partner, seize market opportunities*
 
@@ -53,14 +53,14 @@
 
 ## Features
 
-### (￣▽�? AI-Powered Trading
+### (￣▽￣) AI-Powered Trading
 - **12+ AI Providers** - DeepSeek, Qwen 3, GPT-5, Claude 4.5, Gemini 3, and more
 - **AI Arena** - Multiple AI models analyze simultaneously, vote-based decisions
 - **5 Trading Personas** - Hunter/Balanced/Monk/Flash/Surfer styles for different strategies
 - **Custom Prompts** - Fully customizable AI persona and trading strategy
 - **Smart News Analysis** - AI interprets market news and generates trading signals
 
-### (◎_�? Technical Analysis
+### (◎_◎) Technical Analysis
 - **Multi-Timeframe** - Support for 1m/5m/15m/1h/4h/1d analysis
 - **Rich Indicators** - MA/EMA/RSI/MACD/KDJ/BOLL/ATR/OBV/VWAP and more
 - **Change Tracking** - Visualize indicator trends for better AI understanding
@@ -98,9 +98,9 @@ BTC, ETH, SOL, BNB, XRP, DOGE, GT, TRUMP, ADA, WLFI and other major cryptocurren
 ### Order Types
 | Type | Description | Status |
 |------|-------------|--------|
-| Market Order | Immediate execution at current price | �?Supported |
-| Stop Loss | Auto-close when price triggers | �?Supported |
-| Take Profit | Auto-close when profit target reached | �?Supported |
+| Market Order | Immediate execution at current price | ✅ Supported |
+| Stop Loss | Auto-close when price triggers | ✅ Supported |
+| Take Profit | Auto-close when profit target reached | ✅ Supported |
 | Limit Order | Pending order at specified price | 🔜 Coming Soon |
 
 ### Risk Control System
@@ -150,7 +150,7 @@ git clone https://github.com/hey345437-boop/AI---hyweishi.git
 cd AI---hyweishi
 install.bat
 ```
-After installation, run `启动机器�?bat` and configure API keys in the web interface.
+After installation, run `启动机器人.bat` and configure API keys in the web interface.
 
 **Linux/macOS:**
 ```bash
@@ -205,17 +205,17 @@ hyweishi/
 
 | Provider | Models | Free Tier | Notes |
 |----------|--------|-----------|-------|
-| DeepSeek | V3.1 Chat, R1 Reasoner | �?| High-performance, recommended |
-| Qwen | Qwen 3 (235B), QwQ Plus | �?| Alibaba Cloud, deep reasoning |
-| Spark | Spark 4.0 Ultra | �?Lite | iFlytek |
-| Hunyuan | Turbo Latest | �?Lite | Tencent, 256K context |
-| Doubao | 1.5 Pro, Seed 1.6 | �?| ByteDance |
-| GLM | GLM-4.6, GLM-4 Plus | �?Flash | Zhipu AI |
-| OpenAI | GPT-5.2, o3, o4-mini | �?| Latest flagship |
-| Claude | Claude 4.5 Sonnet/Opus | �?| Anthropic |
-| Gemini | Gemini 3 Pro, 2.5 Flash | �?| Google |
-| Grok | Grok 4, Grok 3 | �?| xAI |
-| Perplexity | Sonar Pro, Reasoning | �?| Web search capability |
+| DeepSeek | V3.1 Chat, R1 Reasoner | ✅ | High-performance, recommended |
+| Qwen | Qwen 3 (235B), QwQ Plus | ✅ | Alibaba Cloud, deep reasoning |
+| Spark | Spark 4.0 Ultra | ✅ Lite | iFlytek |
+| Hunyuan | Turbo Latest | ✅ Lite | Tencent, 256K context |
+| Doubao | 1.5 Pro, Seed 1.6 | ✅ | ByteDance |
+| GLM | GLM-4.6, GLM-4 Plus | ✅ Flash | Zhipu AI |
+| OpenAI | GPT-5.2, o3, o4-mini | ❌ | Latest flagship |
+| Claude | Claude 4.5 Sonnet/Opus | ❌ | Anthropic |
+| Gemini | Gemini 3 Pro, 2.5 Flash | ✅ | Google |
+| Grok | Grok 4, Grok 3 | ❌ | xAI |
+| Perplexity | Sonar Pro, Reasoning | ❌ | Web search capability |
 
 ---
 
@@ -224,11 +224,11 @@ hyweishi/
 This project is licensed under [AGPL-3.0](LICENSE).
 
 **This means:**
-- �?Free to use, modify, and distribute
-- �?Can be used for personal learning and research
+- ✅ Free to use, modify, and distribute
+- ✅ Can be used for personal learning and research
 - ⚠️ Modified code must also be open-sourced
 - ⚠️ If used for network services, source code must be disclosed
-- �?Copyright notices and license information must not be removed
+- ❌ Copyright notices and license information must not be removed
 
 **For commercial use, please contact the author for licensing.**
 
@@ -236,7 +236,7 @@ This project is licensed under [AGPL-3.0](LICENSE).
 
 ## Support the Project
 
-If this project helps you, consider buying the author a coffee (´▽`ʃ♡�?
+If this project helps you, consider buying the author a coffee (´▽`ʃ♡ƪ)
 
 **Crypto Donations:**
 - USDT (BEP20): `0x67c77a43d6524994af9497b4cd32080b95f2ace9`
@@ -250,11 +250,11 @@ If this project helps you, consider buying the author a coffee (´▽`ʃ♡�?
 
 ---
 
-## �?Give it a Star
+## ⭐ Give it a Star
 
 <div align="center">
 
-If you find this project helpful, please give it a **Star** �?
+If you find this project helpful, please give it a **Star** ⭐
 
 It means a lot to a student developer like me (´;ω;`)
 
