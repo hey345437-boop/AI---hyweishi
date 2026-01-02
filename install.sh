@@ -21,7 +21,7 @@ echo "[1/5] 检查 Python..."
 if ! command -v python3 &> /dev/null; then
     echo "[错误] Python3 未安装"
     echo ""
-    echo "请安装 Python 3.8+:"
+    echo "请安装 Python 3.9+:"
     echo "  Ubuntu/Debian: sudo apt install python3 python3-venv python3-pip"
     echo "  macOS: brew install python3"
     exit 1
@@ -48,9 +48,35 @@ echo ""
 
 # 安装依赖
 echo "[4/5] 安装依赖包（可能需要几分钟）..."
-pip install --upgrade pip > /dev/null 2>&1
-pip install -r requirements.txt
-echo "      依赖安装完成 ✓"
+echo "      尝试使用国内镜像源加速..."
+pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn > /dev/null 2>&1 || pip install --upgrade pip > /dev/null 2>&1
+
+# 首先尝试国内镜像（清华源）
+if pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn; then
+    echo "      依赖安装完成 ✓"
+else
+    echo ""
+    echo "      清华源安装失败，尝试阿里云镜像..."
+    if pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com; then
+        echo "      依赖安装完成 ✓"
+    else
+        echo ""
+        echo "      阿里云镜像也失败，尝试官方源..."
+        if pip install -r requirements.txt --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
+            echo "      依赖安装完成 ✓"
+        else
+            echo ""
+            echo "[错误] 依赖安装失败"
+            echo ""
+            echo "可能的解决方案:"
+            echo "  1. 检查网络连接"
+            echo "  2. 关闭VPN或代理软件后重试"
+            echo "  3. 检查系统时间是否正确"
+            echo "  4. 手动运行: pip install -r requirements.txt"
+            exit 1
+        fi
+    fi
+fi
 echo ""
 
 # 配置环境变量
@@ -59,8 +85,6 @@ if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
         cp .env.example .env
         echo "      已创建 .env 配置文件"
-        echo ""
-        echo "⚠️  重要：请编辑 .env 文件，填入你的 API 密钥"
     else
         echo "[警告] 未找到 .env.example 模板"
     fi
@@ -78,11 +102,12 @@ echo "║                     安装完成！                               ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "下一步:"
-echo "  1. 编辑 .env 文件，配置你的 OKX API 密钥"
-echo "  2. 运行以下命令启动系统:"
+echo "  1. 运行以下命令启动系统:"
 echo ""
 echo "     source .venv/bin/activate"
 echo "     streamlit run app.py"
+echo ""
+echo "  2. 在 Web 界面中配置 API 密钥"
 echo ""
 echo "或使用 Docker:"
 echo "     docker-compose up -d"
