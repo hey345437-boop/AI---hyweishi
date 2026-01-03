@@ -2575,11 +2575,14 @@ def main():
                         continue
                     
                     # 检查止损（自定义策略使用）
+                    # 从数据库获取当前选择的策略ID
+                    _bot_config_for_sl = get_bot_config()
+                    _strategy_id_for_sl = _bot_config_for_sl.get('selected_strategy_id', 'strategy_v2')
                     try:
                         from strategies.strategy_registry import is_custom_strategy
-                        is_custom = is_custom_strategy(strategy_id)
+                        is_custom = is_custom_strategy(_strategy_id_for_sl)
                     except ImportError:
-                        is_custom = strategy_id not in ['strategy_v1', 'strategy_v2']
+                        is_custom = _strategy_id_for_sl not in ['strategy_v1', 'strategy_v2']
                     
                     if is_custom:
                         should_sl, sl_pnl, sl_reason = hedge_manager.check_stop_loss(symbol, current_price)
